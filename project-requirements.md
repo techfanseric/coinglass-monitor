@@ -18,10 +18,14 @@
 - **触发条件**: 利率 > 用户设定阈值
 - **通知策略**:
   ```
-  首次触发 → 立即通知
-  持续超阈值 → 3小时或6小时后重复通知
-  利率回落 → 立即发送回落通知
+  首次触发 → 立即通知 (在允许时间段内)
+  持续超阈值 → 3小时或6小时后重复通知 (在允许时间段内)
+  利率回落 → 立即发送回落通知 (在允许时间段内)
   ```
+- **时间限制**:
+  - 可设置通知时间段 (例如: 09:00 - 24:00)
+  - 非时间段内的触发会延迟到下一个允许时间段发送
+  - 避免夜间邮件打扰
 - **状态管理**: NORMAL → ALERT → COOLDOWN 循环
 
 ### 3. 邮件通知功能
@@ -59,6 +63,7 @@ Cloudflare Workers (监控逻辑)
   - 监控币种选择 (多选)
   - 阈值设置 (每个币种独立)
   - 重复通知间隔 (3小时/6小时)
+  - 通知时间段设置 (例如: 09:00 - 24:00)
   - 邮件接收地址
   - 监控开关
 
@@ -83,6 +88,11 @@ Cloudflare Workers (监控逻辑)
       }
     ],
     "repeat_interval": 3, // 小时
+    "notification_hours": {
+      "start": "09:00",  // 开始时间
+      "end": "24:00",    // 结束时间
+      "enabled": true    // 是否启用时间限制
+    },
     "monitoring_enabled": true
   }
 }
@@ -96,7 +106,14 @@ Cloudflare Workers (监控逻辑)
       "status": "alert", // normal/alert/cooldown
       "last_notification": "2025-10-04T14:00:00Z",
       "next_notification": "2025-10-04T17:00:00Z",
-      "last_rate": 5.2
+      "last_rate": 5.2,
+      "pending_notifications": [ // 待发送的通知 (在非时间段内触发)
+        {
+          "type": "alert",
+          "data": {...},
+          "scheduled_time": "2025-10-05T09:00:00Z"
+        }
+      ]
     }
   }
 }
@@ -255,12 +272,20 @@ const emailTemplateVars = {
 const NotificationStateMachine = {
   NORMAL: {
     onRateAboveThreshold: (coin, rate) => {
-      sendAlert(coin, rate);
-      updateCoinState(coin, 'ALERT', {
-        last_notification: now(),
-        next_notification: now() + 3h,
-        last_rate: rate
-      });
+      if (isWithinNotificationHours()) {
+        sendAlert(coin, rate);
+        updateCoinState(coin, 'ALERT', {
+          last_notification: now(),
+          next_notification: now() + 3h,
+          last_rate: rate
+        });
+      } else {
+        // 非时间段内，延迟到下一个允许时间段
+        scheduleNotification(coin, rate, 'alert', getNextNotificationTime());
+        updateCoinState(coin, 'ALERT', {
+          last_rate: rate
+        });
+      }
     }
   },
 
@@ -272,24 +297,60 @@ const NotificationStateMachine = {
     },
 
     onRateBelowThreshold: (coin, rate) => {
-      sendRecovery(coin, rate);
-      updateCoinState(coin, 'NORMAL', { last_rate: rate });
+      if (isWithinNotificationHours()) {
+        sendRecovery(coin, rate);
+        updateCoinState(coin, 'NORMAL', { last_rate: rate });
+      } else {
+        // 非时间段内，延迟到下一个允许时间段
+        scheduleNotification(coin, rate, 'recovery', getNextNotificationTime());
+        updateCoinState(coin, 'NORMAL', { last_rate: rate });
+      }
     }
   },
 
   COOLDOWN: {
     onCooldownEnd: (coin, rate) => {
       if (rate > threshold) {
-        sendRepeatAlert(coin, rate);
-        updateCoinState(coin, 'ALERT', {
-          last_notification: now(),
-          next_notification: now() + 3h,
-          last_rate: rate
-        });
+        if (isWithinNotificationHours()) {
+          sendRepeatAlert(coin, rate);
+          updateCoinState(coin, 'ALERT', {
+            last_notification: now(),
+            next_notification: now() + 3h,
+            last_rate: rate
+          });
+        } else {
+          // 非时间段内，延迟到下一个允许时间段
+          scheduleNotification(coin, rate, 'alert', getNextNotificationTime());
+        }
       }
     }
   }
 };
+
+// 时间检查函数
+function isWithinNotificationHours() {
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  const currentTime = currentHour * 60 + currentMinute;
+
+  const startTime = parseTime(config.notification_hours.start);
+  const endTime = parseTime(config.notification_hours.end);
+
+  return config.notification_hours.enabled &&
+         currentTime >= startTime && currentTime < endTime;
+}
+
+function getNextNotificationTime() {
+  const now = new Date();
+  const nextDay = new Date(now);
+  nextDay.setDate(nextDay.getDate() + 1);
+  nextDay.setHours(parseInt(config.notification_hours.start.split(':')[0]));
+  nextDay.setMinutes(parseInt(config.notification_hours.start.split(':')[1]));
+  nextDay.setSeconds(0);
+
+  return nextDay;
+}
 ```
 
 ## 成本评估

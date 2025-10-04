@@ -1,0 +1,34 @@
+name = "coinglass-monitor"
+main = "src/index.js"
+compatibility_date = "2023-10-30"
+
+# KV 命名空间配置
+[[kv_namespaces]]
+binding = "CONFIG_KV"
+id = "your-config-namespace-id"  # 需要创建后替换
+
+[[kv_namespaces]]
+binding = "STATE_KV"
+id = "your-state-namespace-id"   # 需要创建后替换
+
+# 定时任务配置 - 每小时执行一次
+[[triggers]]
+crons = ["0 * * * *"]
+
+# 环境变量
+[vars]
+ENVIRONMENT = "production"
+
+# 开发环境配置
+[env.development]
+kv_namespaces = [
+  { binding = "CONFIG_KV", id = "dev-config-namespace-id" },
+  { binding = "STATE_KV", id = "dev-state-namespace-id" }
+]
+
+# 预览环境配置
+[env.preview]
+kv_namespaces = [
+  { binding = "CONFIG_KV", id = "preview-config-namespace-id" },
+  { binding = "STATE_KV", id = "preview-state-namespace-id" }
+]
