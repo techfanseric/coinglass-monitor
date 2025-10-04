@@ -1,10 +1,11 @@
 /**
- * CoinGlass 利率监控 Worker
- * 主要功能：
- * 1. 定时抓取 CoinGlass 网站数据
- * 2. 检查利率阈值
- * 3. 发送邮件通知
+ * CoinGlass 利率监控 Worker - 重构版本
+ * 主要功能：路由和调度
  */
+
+// 导入模块
+import { runMonitoring } from './modules/monitor.js';
+import { getUserConfig, getCoinState } from './utils/config.js';
 
 export default {
   // 定时任务入口
@@ -34,6 +35,11 @@ export default {
       });
     }
 
+    // 主页路由
+    if (url.pathname === '/' || url.pathname === '/index.html') {
+      return getHomePage();
+    }
+
     // API 路由
     if (url.pathname === '/api/config') {
       if (request.method === 'GET') {
@@ -47,297 +53,901 @@ export default {
       return getStatus(env);
     }
 
+    if (url.pathname === '/api/history') {
+      return getEmailHistory(env);
+    }
+
     // 默认返回
     return new Response('Not Found', { status: 404 });
   },
 };
 
 /**
- * 运行监控逻辑
+ * 获取主页
  */
-async function runMonitoring(env) {
-  console.log('1. 开始抓取 CoinGlass 数据...');
+async function getHomePage() {
+  // 由于Cloudflare Workers不支持文件系统API，我们仍需要使用内联HTML
+  const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CoinGlass 利率监控</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-  // 1. 抓取数据
-  const rateData = await fetchRateData();
-  if (!rateData) {
-    console.error('数据抓取失败');
-    return;
-  }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #fafbfc;
+            padding: 12px;
+            line-height: 1.5;
+            color: #2d3748;
+        }
 
-  console.log('2. 数据抓取成功，开始检查阈值...');
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+        }
 
-  // 2. 获取用户配置
-  const config = await getUserConfig(env);
-  if (!config || !config.monitoring_enabled) {
-    console.log('监控未启用');
-    return;
-  }
+        .header {
+            background: #f8fafc;
+            color: #4a5568;
+            padding: 16px 20px;
+            text-align: center;
+            border-bottom: 1px solid #e2e8f0;
+        }
 
-  // 3. 检查每个币种的阈值
-  for (const coin of config.coins.filter(c => c.enabled)) {
-    await checkCoinThreshold(env, coin, rateData, config);
-  }
+        .header h1 {
+            font-size: 1.25em;
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
 
-  console.log('3. 阈值检查完成');
-}
+        .header p {
+            font-size: 0.875em;
+            color: #718096;
+        }
 
-/**
- * 抓取 CoinGlass 利率数据
- */
-async function fetchRateData() {
-  try {
-    const response = await fetch('https://www.coinglass.com/zh/pro/i/MarginFeeChart', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3',
-      },
-    });
+        .content {
+            padding: 20px;
+        }
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
+        .section {
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+        }
 
-    const html = await response.text();
+        .section:last-child {
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
 
-    // 解析 HTML 提取利率数据
-    return parseRateData(html);
-  } catch (error) {
-    console.error('抓取数据失败:', error);
-    return null;
-  }
-}
+        .section h2 {
+            color: #2d3748;
+            margin-bottom: 12px;
+            font-size: 1.1em;
+            font-weight: 600;
+        }
 
-/**
- * 解析 HTML 提取利率数据
- */
-function parseRateData(html) {
-  // 这里需要实现 HTML 解析逻辑
-  // 暂时返回模拟数据
-  return {
-    exchange: 'Binance',
-    timestamp: new Date().toISOString(),
-    coins: {
-      'USDT': {
-        annual_rate: 7.09,
-        daily_rate: 0.02,
-        hourly_rate: 0.0008,
-        history: [
-          { time: '2025-10-04 23:00', rate: 7.09 },
-          { time: '2025-10-04 22:00', rate: 7.09 },
-          { time: '2025-10-04 21:00', rate: 7.09 },
-          { time: '2025-10-04 20:00', rate: 7.09 },
-          { time: '2025-10-04 19:00', rate: 7.09 },
-        ]
-      },
-      'CFX': {
-        annual_rate: 5.0,
-        daily_rate: 0.014,
-        hourly_rate: 0.0006,
-        history: [
-          { time: '2025-10-04 14:00', rate: 5.0 },
-          { time: '2025-10-04 13:00', rate: 4.8 },
-          { time: '2025-10-04 12:00', rate: 4.5 },
-          { time: '2025-10-04 11:00', rate: 4.2 },
-          { time: '2025-10-04 10:00', rate: 4.0 },
-        ]
-      },
-      'IOST': {
-        annual_rate: 8.0,
-        daily_rate: 0.022,
-        hourly_rate: 0.0009,
-        history: [
-          { time: '2025-10-04 14:00', rate: 8.0 },
-          { time: '2025-10-04 13:00', rate: 7.5 },
-          { time: '2025-10-04 12:00', rate: 7.2 },
-          { time: '2025-10-04 11:00', rate: 6.8 },
-          { time: '2025-10-04 10:00', rate: 6.5 },
-        ]
-      }
-    }
-  };
-}
+        .form-group {
+            margin-bottom: 12px;
+        }
 
-/**
- * 检查单个币种的阈值
- */
-async function checkCoinThreshold(env, coin, rateData, config) {
-  const currentRate = rateData.coins[coin.symbol]?.annual_rate;
-  if (!currentRate) {
-    console.log(`币种 ${coin.symbol} 数据不存在`);
-    return;
-  }
+        label {
+            display: block;
+            margin-bottom: 4px;
+            color: #4a5568;
+            font-size: 0.875em;
+            font-weight: 500;
+        }
 
-  // 获取币种状态
-  const state = await getCoinState(env, coin.symbol);
-  const now = new Date();
+        input, select {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid #cbd5e0;
+            border-radius: 4px;
+            font-size: 0.9em;
+            background: #ffffff;
+            transition: border-color 0.15s ease;
+        }
 
-  // 状态机逻辑
-  if (currentRate > coin.threshold) {
-    // 利率超过阈值
-    if (state.status === 'normal' || !state.status) {
-      // 首次触发
-      if (isWithinNotificationHours(config)) {
-        // 在允许时间段内，立即通知
-        await sendAlert(env, coin, currentRate, rateData, config);
-        await updateCoinState(env, coin.symbol, 'alert', {
-          last_notification: now.toISOString(),
-          next_notification: new Date(now.getTime() + config.repeat_interval * 60 * 60 * 1000).toISOString(),
-          last_rate: currentRate
+        select {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            background-image: none;
+        }
+
+        input[type="time"] {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: #718096;
+            box-shadow: 0 0 0 1px #718096;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 36px;
+            height: 18px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #cbd5e0;
+            transition: .15s ease;
+            border-radius: 18px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 14px;
+            width: 14px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            transition: .15s ease;
+            border-radius: 50%;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+
+        input:checked + .slider {
+            background-color: #718096;
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(18px);
+        }
+
+        .btn {
+            background: #4a5568;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            font-size: 0.9em;
+            cursor: pointer;
+            width: 100%;
+            border-radius: 4px;
+            font-weight: 500;
+            transition: background-color 0.15s ease;
+        }
+
+        .btn:hover {
+            background: #2d3748;
+        }
+
+        .btn.secondary {
+            background: #718096;
+        }
+
+        .btn.secondary:hover {
+            background: #4a5568;
+        }
+
+        #alerts {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            max-width: 500px;
+            width: 90%;
+            pointer-events: none; /* 让点击穿透到关闭按钮 */
+        }
+
+        .alert {
+            background: #fef5e7;
+            border: 1px solid #f9e79f;
+            padding: 12px 16px;
+            margin-bottom: 8px;
+            color: #7d6608;
+            font-size: 0.9em;
+            border-radius: 4px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            animation: slideDown 0.3s ease;
+            position: relative;
+            pointer-events: auto; /* 恢复点击事件 */
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .alert.success {
+            background: #eafaf1;
+            border: 1px solid #a9dfbf;
+            color: #239b56;
+        }
+
+        .alert-content {
+            flex: 1;
+            line-height: 1.4;
+        }
+
+        .alert-close {
+            background: none;
+            border: none;
+            color: inherit;
+            cursor: pointer;
+            font-size: 1.2em;
+            line-height: 1;
+            padding: 0;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: background-color 0.15s ease;
+            flex-shrink: 0;
+        }
+
+        .alert-close:hover {
+            background-color: rgba(0, 0, 0, 0.1);
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 1;
+                transform: translateY(0);
+            }
+            to {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+        }
+
+        .alert.removing {
+            animation: slideUp 0.3s ease forwards;
+        }
+
+        @media (max-width: 600px) {
+            #alerts {
+                top: 10px;
+                width: 95%;
+                max-width: none;
+            }
+
+            .alert {
+                padding: 10px 12px;
+                font-size: 0.85em;
+            }
+        }
+
+        .loading {
+            text-align: center;
+            padding: 16px;
+            color: #718096;
+            font-size: 0.9em;
+        }
+
+        .main-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+        }
+
+        .main-toggle h3 {
+            color: #2d3748;
+            font-size: 1em;
+            font-weight: 600;
+        }
+
+        /* 监控列表样式 */
+        .monitor-list {
+            margin-top: 12px;
+        }
+
+        .monitor-item {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+            padding: 12px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .monitor-info {
+            flex: 1;
+            font-size: 0.9em;
+            line-height: 1.4;
+        }
+
+        .monitor-info strong {
+            color: #2d3748;
+        }
+
+        .monitor-info .timeframe {
+            color: #718096;
+            font-weight: normal;
+        }
+
+        .monitor-info small {
+            color: #718096;
+        }
+
+        .monitor-actions {
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .remove-btn {
+            background: #e53e3e;
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75em;
+        }
+
+        .remove-btn:hover {
+            background: #c53030;
+        }
+
+        /* 快速添加监控样式 */
+        .add-monitor-row {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .add-monitor-item {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .add-monitor-item input,
+        .add-monitor-item select {
+            flex: 1;
+            min-width: 80px;
+            padding: 6px 8px;
+            border: 1px solid #cbd5e0;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
+
+        .add-monitor-item select#quickCoin {
+            flex: 1.2;
+            min-width: 100px;
+        }
+
+        .add-monitor-item input[type="number"] {
+            flex: 1;
+        }
+
+        .add-btn {
+            background: #4a5568;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85em;
+            white-space: nowrap;
+            width: auto;
+            min-width: 80px;
+        }
+
+        .add-btn:hover {
+            background: #2d3748;
+        }
+
+        /* 两栏布局样式 */
+        .two-column-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .left-column, .right-column {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        @media (max-width: 900px) {
+            .two-column-layout {
+                grid-template-columns: 1fr;
+                gap: 16px;
+            }
+        }
+
+        @media (max-width: 600px) {
+            .content {
+                padding: 16px;
+            }
+            .add-monitor-row {
+                flex-direction: column;
+                gap: 8px;
+            }
+            .add-monitor-row input,
+            .add-monitor-row select {
+                min-width: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>CoinGlass 利率监控</h1>
+            <p>实时监控币种借贷利率</p>
+        </div>
+
+        <div class="content">
+            <div id="alerts"></div>
+
+            <!-- 主监控开关 -->
+            <div class="section">
+                <div class="main-toggle">
+                    <h3>监控状态</h3>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="mainToggle">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- 两栏布局 -->
+            <div class="two-column-layout">
+                <!-- 左栏：监控项目管理 -->
+                <div class="left-column">
+                    <!-- 添加监控 -->
+                    <div class="section">
+                        <h2>添加监控</h2>
+
+                        <div class="add-monitor-row">
+                            <div class="add-monitor-item">
+                                <label for="quickExchange" style="min-width: 60px; font-size: 0.875em;">交易所</label>
+                                <select id="quickExchange">
+                                    <option value="binance">Binance</option>
+                                    <option value="okx">OKX</option>
+                                    <option value="bybit">Bybit</option>
+                                </select>
+                            </div>
+
+                            <div class="add-monitor-item">
+                                <label for="quickCoin" style="min-width: 60px; font-size: 0.875em;">币种</label>
+                                <select id="quickCoin">
+                                    <option value="USDT">USDT</option>
+                                    <option value="USDC">USDC</option>
+                                    <option value="BUSD">BUSD</option>
+                                    <option value="DAI">DAI</option>
+                                    <option value="TUSD">TUSD</option>
+                                    <option value="FDUSD">FDUSD</option>
+                                    <option value="USDD">USDD</option>
+                                    <option value="LUSD">LUSD</option>
+                                    <option value="BTC">BTC</option>
+                                    <option value="ETH">ETH</option>
+                                    <option value="BNB">BNB</option>
+                                    <option value="SOL">SOL</option>
+                                    <option value="AVAX">AVAX</option>
+                                    <option value="MATIC">MATIC</option>
+                                    <option value="DOT">DOT</option>
+                                    <option value="ATOM">ATOM</option>
+                                    <option value="LINK">LINK</option>
+                                    <option value="UNI">UNI</option>
+                                    <option value="AAVE">AAVE</option>
+                                    <option value="MKR">MKR</option>
+                                    <option value="COMP">COMP</option>
+                                    <option value="CFX">CFX</option>
+                                    <option value="IOST">IOST</option>
+                                    <option value="LTC">LTC</option>
+                                    <option value="BCH">BCH</option>
+                                    <option value="XRP">XRP</option>
+                                    <option value="ADA">ADA</option>
+                                    <option value="DOGE">DOGE</option>
+                                    <option value="SHIB">SHIB</option>
+                                    <option value="TRX">TRX</option>
+                                    <option value="FTM">FTM</option>
+                                    <option value="NEAR">NEAR</option>
+                                    <option value="SAND">SAND</option>
+                                    <option value="MANA">MANA</option>
+                                    <option value="AXS">AXS</option>
+                                    <option value="GALA">GALA</option>
+                                    <option value="APE">APE</option>
+                                    <option value="SUSHI">SUSHI</option>
+                                    <option value="CRV">CRV</option>
+                                    <option value="YFI">YFI</option>
+                                    <option value="1INCH">1INCH</option>
+                                </select>
+                            </div>
+
+                            <div class="add-monitor-item">
+                                <label for="quickTimeframe" style="min-width: 60px; font-size: 0.875em;">时间</label>
+                                <select id="quickTimeframe">
+                                    <option value="1h">1小时</option>
+                                    <option value="24h">24小时</option>
+                                </select>
+                            </div>
+
+                            <div class="add-monitor-item">
+                                <label for="quickThreshold" style="min-width: 60px; font-size: 0.875em;">阈值</label>
+                                <input type="number" id="quickThreshold" placeholder="阈值%" step="0.1" min="0">
+                            </div>
+
+                            <div class="add-monitor-item">
+                                <div style="min-width: 60px;"></div>
+                                <button onclick="addMonitor()" class="add-btn">添加监控</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 监控列表 -->
+                    <div class="section">
+                        <h2>监控列表</h2>
+                        <div id="monitorList" class="monitor-list">
+                            <p style="text-align: center; color: #6b7280;">暂无监控项目</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 右栏：通知设置 -->
+                <div class="right-column">
+                    <!-- 基础设置 -->
+                    <div class="section">
+                        <h2>通知设置</h2>
+
+                        <div class="form-group">
+                            <label for="email">通知邮箱</label>
+                            <input type="email" id="email" placeholder="your-email@example.com" autocomplete="off">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="repeatInterval">重复通知间隔</label>
+                            <select id="repeatInterval">
+                                <option value="3">3小时</option>
+                                <option value="6">6小时</option>
+                                <option value="12">12小时</option>
+                                <option value="24">24小时</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- 时间设置 -->
+                    <div class="section">
+                        <h2>通知时间段</h2>
+
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="timeControl" style="width: auto; margin-right: 8px;">
+                                启用时间限制
+                            </label>
+                        </div>
+
+                        <div class="time-inputs" style="display: flex; flex-direction: column; gap: 12px;">
+                            <div class="form-group">
+                                <label for="startTime">开始时间</label>
+                                <input type="time" id="startTime" value="09:00">
+                            </div>
+                            <div class="form-group">
+                                <label for="endTime">结束时间</label>
+                                <input type="time" id="endTime" value="24:00">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="section">
+                <button class="btn" onclick="saveConfig()">保存配置</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Web界面逻辑
+        const API_BASE = window.location.origin;
+        let currentConfig = null;
+
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            loadConfig();
+            loadStatus();
+            setInterval(loadStatus, 30000);
+
+            // 添加主监控开关的事件监听器
+            const mainToggle = document.getElementById('mainToggle');
+            if (mainToggle) {
+                mainToggle.addEventListener('change', function() {
+                    // 检查是否满足启用监控的条件
+                    if (this.checked) {
+                        const email = document.getElementById('email').value.trim();
+                        const config = currentConfig || {};
+                        const hasMonitors = config.coins && config.coins.length > 0;
+
+                        if (!email) {
+                            showAlert('请先填写通知邮箱地址', 'error');
+                            this.checked = false; // 重置开关状态
+                            return;
+                        }
+
+                        if (!hasMonitors) {
+                            showAlert('请先添加至少一个监控项目', 'error');
+                            this.checked = false; // 重置开关状态
+                            return;
+                        }
+                    }
+
+                    saveConfig(); // 状态改变时自动保存配置
+                    showAlert(this.checked ? '监控已开启' : '监控已关闭', 'success');
+                });
+            }
         });
-      } else {
-        // 非时间段内，延迟到下一个允许时间段
-        const nextNotificationTime = getNextNotificationTime(config);
-        await scheduleNotification(env, coin.symbol, 'alert', {
-          coin,
-          currentRate,
-          rateData,
-          config,
-          scheduled_time: nextNotificationTime.toISOString()
-        });
-        await updateCoinState(env, coin.symbol, 'alert', {
-          last_rate: currentRate,
-          pending_notification: true
-        });
-        console.log(`币种 ${coin.symbol} 触发警报，但不在通知时间段内，已安排在 ${nextNotificationTime.toLocaleString()} 发送`);
-      }
-    } else if (state.status === 'alert' && now >= new Date(state.next_notification)) {
-      // 冷却期结束，再次通知
-      if (isWithinNotificationHours(config)) {
-        await sendAlert(env, coin, currentRate, rateData, config);
-        await updateCoinState(env, coin.symbol, 'alert', {
-          last_notification: now.toISOString(),
-          next_notification: new Date(now.getTime() + config.repeat_interval * 60 * 60 * 1000).toISOString(),
-          last_rate: currentRate
-        });
-      } else {
-        // 非时间段内，延迟到下一个允许时间段
-        const nextNotificationTime = getNextNotificationTime(config);
-        await scheduleNotification(env, coin.symbol, 'alert', {
-          coin,
-          currentRate,
-          rateData,
-          config,
-          scheduled_time: nextNotificationTime.toISOString()
-        });
-        await updateCoinState(env, coin.symbol, 'alert', {
-          next_notification: nextNotificationTime.toISOString(),
-          last_rate: currentRate
-        });
-        console.log(`币种 ${coin.symbol} 重复警报，但不在通知时间段内，已安排在 ${nextNotificationTime.toLocaleString()} 发送`);
-      }
-    }
-  } else {
-    // 利率回落到阈值以下
-    if (state.status === 'alert') {
-      if (isWithinNotificationHours(config)) {
-        await sendRecovery(env, coin, currentRate, config);
-        await updateCoinState(env, coin.symbol, 'normal', {
-          last_rate: currentRate
-        });
-      } else {
-        // 非时间段内，延迟到下一个允许时间段
-        const nextNotificationTime = getNextNotificationTime(config);
-        await scheduleNotification(env, coin.symbol, 'recovery', {
-          coin,
-          currentRate,
-          config,
-          scheduled_time: nextNotificationTime.toISOString()
-        });
-        await updateCoinState(env, coin.symbol, 'normal', {
-          last_rate: currentRate,
-          pending_notification: true
-        });
-        console.log(`币种 ${coin.symbol} 回落通知，但不在通知时间段内，已安排在 ${nextNotificationTime.toLocaleString()} 发送`);
-      }
-    }
-  }
 
-  // 检查是否有待发送的通知
-  await checkPendingNotifications(env, config);
-}
+        // 添加监控
+        function addMonitor() {
+            const exchange = document.getElementById('quickExchange').value;
+            const coin = document.getElementById('quickCoin').value;
+            const timeframe = document.getElementById('quickTimeframe').value;
+            const threshold = parseFloat(document.getElementById('quickThreshold').value);
 
-/**
- * 发送警报邮件
- */
-async function sendAlert(env, coin, currentRate, rateData, config) {
-  console.log(`发送警报: ${coin.symbol} 当前利率 ${currentRate}% 超过阈值 ${coin.threshold}%`);
+            if (!coin) {
+                showAlert('请选择币种');
+                return;
+            }
 
-  // TODO: 实现 EmailJS 发送逻辑
-  // 这里先使用日志模拟
-  const alertData = {
-    type: 'alert',
-    coin: coin.symbol,
-    current_rate: currentRate,
-    threshold: coin.threshold,
-    timestamp: new Date().toISOString(),
-    email: config.email,
-    history: rateData.coins[coin.symbol]?.history || []
-  };
+            if (!threshold || threshold <= 0) {
+                showAlert('请输入有效的阈值');
+                return;
+            }
 
-  console.log('警报数据:', alertData);
-}
+            const config = currentConfig || {};
+            if (!config.coins) config.coins = [];
 
-/**
- * 发送回落通知
- */
-async function sendRecovery(env, coin, currentRate, config) {
-  console.log(`发送回落通知: ${coin.symbol} 当前利率 ${currentRate}% 已回落到阈值以下`);
+            const exists = config.coins.some(c =>
+                c.symbol === coin && c.exchange === exchange && c.timeframe === timeframe
+            );
 
-  // TODO: 实现 EmailJS 发送逻辑
-  const recoveryData = {
-    type: 'recovery',
-    coin: coin.symbol,
-    current_rate: currentRate,
-    threshold: coin.threshold,
-    timestamp: new Date().toISOString(),
-    email: config.email
-  };
+            if (exists) {
+                showAlert('该监控已存在');
+                return;
+            }
 
-  console.log('回落通知数据:', recoveryData);
-}
+            config.coins.push({
+                symbol: coin,
+                exchange: exchange,
+                timeframe: timeframe,
+                threshold: threshold,
+                enabled: true
+            });
 
-/**
- * 获取用户配置
- */
-async function getUserConfig(env) {
-  try {
-    const config = await env.CONFIG_KV.get('user_settings');
-    return config ? JSON.parse(config) : null;
-  } catch (error) {
-    console.error('获取配置失败:', error);
-    return null;
-  }
-}
+            saveConfig(config);
+            document.getElementById('quickThreshold').value = '';
+            showAlert('监控添加成功', 'success');
+            loadStatus();
+        }
 
-/**
- * 获取币种状态
- */
-async function getCoinState(env, coinSymbol) {
-  try {
-    const state = await env.STATE_KV.get(`coin_${coinSymbol}`);
-    return state ? JSON.parse(state) : { status: 'normal' };
-  } catch (error) {
-    console.error('获取币种状态失败:', error);
-    return { status: 'normal' };
-  }
-}
+        function showAlert(message, type = 'error') {
+            const alertsContainer = document.getElementById('alerts');
+            const alert = document.createElement('div');
+            alert.className = \`alert \${type}\`;
 
-/**
- * 更新币种状态
- */
-async function updateCoinState(env, coinSymbol, status, data) {
-  try {
-    const state = {
-      status,
-      ...data,
-      updated_at: new Date().toISOString()
-    };
-    await env.STATE_KV.put(`coin_${coinSymbol}`, JSON.stringify(state));
-  } catch (error) {
-    console.error('更新币种状态失败:', error);
-  }
+            // 创建内容容器
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'alert-content';
+            contentDiv.textContent = message;
+
+            // 创建关闭按钮
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'alert-close';
+            closeBtn.innerHTML = '×';
+            closeBtn.setAttribute('aria-label', '关闭提示');
+            closeBtn.title = '关闭';
+
+            // 添加关闭功能
+            closeBtn.addEventListener('click', () => {
+                removeAlert(alert);
+            });
+
+            // 组装元素
+            alert.appendChild(contentDiv);
+            alert.appendChild(closeBtn);
+            alertsContainer.appendChild(alert);
+
+            // 自动关闭（5秒后）
+            const timeoutId = setTimeout(() => {
+                removeAlert(alert);
+            }, 5000);
+
+            // 存储timeout ID以便清除
+            alert.dataset.timeoutId = timeoutId;
+        }
+
+        function removeAlert(alert) {
+            // 清除自动关闭的定时器
+            if (alert.dataset.timeoutId) {
+                clearTimeout(parseInt(alert.dataset.timeoutId));
+            }
+
+            // 添加移除动画
+            alert.classList.add('removing');
+
+            // 动画结束后移除元素
+            setTimeout(() => {
+                if (alert.parentNode) {
+                    alert.remove();
+                }
+            }, 300);
+        }
+
+        async function loadConfig() {
+            try {
+                const response = await fetch(\`\${API_BASE}/api/config\`);
+                const config = await response.json();
+                if (config && Object.keys(config).length > 0) {
+                    currentConfig = config;
+                    populateForm(config);
+                    // 配置加载成功不显示提示，避免高频提示
+                }
+            } catch (error) {
+                console.error('加载配置失败:', error);
+                showAlert('加载配置失败，请重试');
+            }
+        }
+
+        function populateForm(config) {
+            // 设置邮箱字段 - 如果有配置就显示实际值，没有就显示占位符
+            const emailInput = document.getElementById('email');
+            if (config.email && config.email.trim() !== '') {
+                emailInput.value = config.email.trim();
+            } else {
+                emailInput.value = '';
+            }
+
+            // 设置其他字段
+            document.getElementById('repeatInterval').value = config.repeat_interval || 3;
+            document.getElementById('mainToggle').checked = config.monitoring_enabled || false;
+            if (config.notification_hours) {
+                document.getElementById('timeControl').checked = config.notification_hours.enabled || false;
+                document.getElementById('startTime').value = config.notification_hours.start || '09:00';
+                document.getElementById('endTime').value = config.notification_hours.end || '24:00';
+            }
+        }
+
+        async function saveConfig(inputConfig = null) {
+            const config = inputConfig || {
+                email: document.getElementById('email').value.trim(),
+                repeat_interval: parseInt(document.getElementById('repeatInterval').value),
+                monitoring_enabled: document.getElementById('mainToggle').checked,
+                notification_hours: {
+                    enabled: document.getElementById('timeControl').checked,
+                    start: document.getElementById('startTime').value,
+                    end: document.getElementById('endTime').value
+                },
+                coins: currentConfig?.coins || []
+            };
+            try {
+                const response = await fetch(\`\${API_BASE}/api/config\`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+                if (response.ok) {
+                    // 配置保存成功不显示提示，避免与其他操作提示重复
+                    currentConfig = config;
+                } else throw new Error('保存失败');
+            } catch (error) {
+                console.error('保存配置失败:', error);
+                if (!inputConfig) showAlert('保存配置失败，请重试');
+            }
+        }
+
+        async function loadStatus() {
+            try {
+                const response = await fetch(\`\${API_BASE}/api/status\`);
+                const data = await response.json();
+                displayStatus(data);
+            } catch (error) {
+                console.error('加载状态失败:', error);
+                document.getElementById('monitorList').innerHTML =
+                    '<p style="text-align: center; color: #ef4444;">状态加载失败</p>';
+            }
+        }
+
+        function displayStatus(data) {
+            const container = document.getElementById('monitorList');
+            const config = currentConfig || {};
+            if (!config.coins || config.coins.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #6b7280;">暂无监控项目</p>';
+                return;
+            }
+            let html = '';
+            config.coins.forEach((coin, index) => {
+                // 确保所有字段都有默认值
+                const exchange = coin.exchange || 'Unknown';
+                const symbol = coin.symbol || 'Unknown';
+                const timeframe = coin.timeframe || '1h';
+                const threshold = coin.threshold || 0;
+
+                const state = data.states && data.states[symbol] ? data.states[symbol] : { status: 'normal' };
+                const statusClass = state.status === 'alert' ? '#ef4444' : state.status === 'normal' ? '#10b981' : '#f59e0b';
+                const statusText = state.status === 'alert' ? '警报' : state.status === 'normal' ? '正常' : '冷却中';
+                html += '<div class="monitor-item">' +
+                        '<div class="monitor-info">' +
+                            '<strong>' + exchange + ' - ' + symbol + '</strong> ' +
+                            '<span class="timeframe">(' + timeframe + ')</span>' +
+                            '<br>' +
+                            '<small>阈值: ' + threshold + '% | 状态: </small>' +
+                            '<span style="color: ' + statusClass + '; font-weight: bold;">' + statusText + '</span>' +
+                            (state.last_rate ? ' | 当前: ' + state.last_rate + '%' : '') +
+                        '</div>' +
+                        '<div class="monitor-actions">' +
+                            '<button onclick="removeMonitor(' + index + ')" class="remove-btn">删除</button>' +
+                        '</div>' +
+                    '</div>';
+            });
+            container.innerHTML = html;
+        }
+
+        
+        function removeMonitor(index) {
+            const config = currentConfig || {};
+            if (config.coins && config.coins[index]) {
+                const coin = config.coins[index];
+                if (confirm('确定要删除监控 ' + coin.exchange + ' - ' + coin.symbol + ' 吗？')) {
+                    config.coins.splice(index, 1);
+                    saveConfig(config);
+                    showAlert('监控已删除', 'success');
+                    loadStatus();
+                }
+            }
+        }
+    </script>
+</body>
+</html>`;
+
+  return new Response(html, {
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'public, max-age=3600', // 缓存1小时
+    },
+  });
 }
 
 /**
@@ -420,120 +1030,33 @@ async function getStatus(env) {
 }
 
 /**
- * 检查当前时间是否在允许的通知时间段内
+ * API: 获取邮件发送历史
  */
-function isWithinNotificationHours(config) {
-  // 如果没有启用时间限制，始终允许通知
-  if (!config.notification_hours || !config.notification_hours.enabled) {
-    return true;
-  }
-
-  const now = new Date();
-  const currentHour = now.getHours();
-  const currentMinute = now.getMinutes();
-  const currentTime = currentHour * 60 + currentMinute;
-
-  const startTime = parseTime(config.notification_hours.start);
-  const endTime = parseTime(config.notification_hours.end);
-
-  return currentTime >= startTime && currentTime < endTime;
-}
-
-/**
- * 解析时间字符串为分钟数
- */
-function parseTime(timeString) {
-  const [hours, minutes] = timeString.split(':').map(Number);
-  return hours * 60 + minutes;
-}
-
-/**
- * 获取下一个通知时间
- */
-function getNextNotificationTime(config) {
-  const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-
-  const startTime = parseTime(config.notification_hours.start);
-  tomorrow.setHours(Math.floor(startTime / 60));
-  tomorrow.setMinutes(startTime % 60);
-  tomorrow.setSeconds(0);
-  tomorrow.setMilliseconds(0);
-
-  return tomorrow;
-}
-
-/**
- * 安排延迟通知
- */
-async function scheduleNotification(env, coinSymbol, type, data) {
+async function getEmailHistory(env) {
   try {
-    const scheduledKey = `scheduled_${coinSymbol}_${Date.now()}`;
-    await env.STATE_KV.put(scheduledKey, JSON.stringify({
-      type,
-      data,
-      coin: coinSymbol,
-      scheduled_time: data.scheduled_time,
-      created_at: new Date().toISOString()
-    }), {
-      expirationTtl: 7 * 24 * 60 * 60 // 7天后过期
-    });
+    const list = await env.STATE_KV.list({ prefix: 'email_history_' });
+    const history = [];
 
-    console.log(`已安排延迟通知: ${coinSymbol} ${type} 在 ${data.scheduled_time}`);
-  } catch (error) {
-    console.error('安排延迟通知失败:', error);
-  }
-}
-
-/**
- * 检查并发送待处理的通知
- */
-async function checkPendingNotifications(env, config) {
-  try {
-    // 如果当前不在通知时间段内，不处理待处理通知
-    if (!isWithinNotificationHours(config)) {
-      return;
-    }
-
-    const now = new Date();
-    const list = await env.STATE_KV.list({ prefix: 'scheduled_' });
-
-    for (const key of list.keys) {
-      try {
-        const scheduled = await env.STATE_KV.get(key.name);
-        if (!scheduled) continue;
-
-        const notification = JSON.parse(scheduled);
-        const scheduledTime = new Date(notification.scheduled_time);
-
-        // 如果已到发送时间，发送通知
-        if (now >= scheduledTime) {
-          console.log(`发送延迟通知: ${notification.coin} ${notification.type}`);
-
-          if (notification.type === 'alert') {
-            await sendAlert(env, notification.data.coin, notification.data.currentRate, notification.data.rateData, notification.data.config);
-          } else if (notification.type === 'recovery') {
-            await sendRecovery(env, notification.data.coin, notification.data.currentRate, notification.data.config);
-          }
-
-          // 删除已处理的待处理通知
-          await env.STATE_KV.delete(key.name);
-
-          // 更新币种状态，清除待处理标记
-          const state = await getCoinState(env, notification.coin);
-          if (state.pending_notification) {
-            await updateCoinState(env, notification.coin, state.status, {
-              ...state,
-              pending_notification: false
-            });
-          }
-        }
-      } catch (error) {
-        console.error(`处理待处理通知失败 ${key.name}:`, error);
+    for (const key of list.keys.slice(-20)) { // 最近20条
+      const record = await env.STATE_KV.get(key.name);
+      if (record) {
+        history.push(JSON.parse(record));
       }
     }
+
+    return new Response(JSON.stringify({ history }), {
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
   } catch (error) {
-    console.error('检查待处理通知失败:', error);
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
   }
 }

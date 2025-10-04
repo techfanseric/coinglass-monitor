@@ -2,22 +2,26 @@ name = "coinglass-monitor"
 main = "src/index.js"
 compatibility_date = "2023-10-30"
 
-# KV 命名空间配置
+# KV 命名空间配置（需要创建后替换实际ID）
 [[kv_namespaces]]
 binding = "CONFIG_KV"
-id = "your-config-namespace-id"  # 需要创建后替换
+id = "dba90c614fd048358b1ee57a3457abeb"  # 已创建
 
 [[kv_namespaces]]
 binding = "STATE_KV"
-id = "your-state-namespace-id"   # 需要创建后替换
+id = "12b1769584104d768c4efb7809827f90"   # 已创建
 
 # 定时任务配置 - 每小时执行一次
-[[triggers]]
+[triggers]
 crons = ["0 * * * *"]
 
 # 环境变量
 [vars]
 ENVIRONMENT = "production"
+# EmailJS配置 (通过环境变量加载)
+# EMAILJS_PUBLIC_KEY
+# EMAILJS_SERVICE_ID
+# EMAILJS_TEMPLATE_ID
 
 # 开发环境配置
 [env.development]
