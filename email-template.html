@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>多币种利率监控提醒</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: system-ui, sans-serif, Arial; font-size: 12px; background-color: #f8f9fa;">
+    <div style="max-width: 600px; margin: 20px auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden;">
+
+        <!-- 邮件头部 -->
+        <div style="background-color: #ffffff; border-bottom: 3px solid #e74c3c; color: #2c3e50; padding: 20px; text-align: center;">
+            <h1 style="margin: 0; font-size: 24px;">🚨 利率监控提醒</h1>
+            <p style="margin: 10px 0 0 0; color: #7f8c8d;">{{exchange_name}} 多币种利率异常提醒</p>
+        </div>
+
+        <!-- 主要内容 -->
+        <div style="padding: 20px;">
+            <div>CoinGlass利率监控提醒：您关注的多个币种利率已触发阈值条件。</div>
+
+            <div
+                style="
+                    margin-top: 20px;
+                    padding: 15px 0;
+                    border-width: 1px 0;
+                    border-style: dashed;
+                    border-color: lightgrey;
+                "
+            >
+                <table role="presentation">
+                    <tr>
+                        <td style="vertical-align: top">
+                            <div
+                                style="
+                                    padding: 6px 10px;
+                                    margin: 0 10px;
+                                    background-color: #fff3cd;
+                                    border-radius: 5px;
+                                    font-size: 26px;
+                                "
+                                role="img"
+                            >
+                                ⚠️
+                            </div>
+                        </td>
+                        <td style="vertical-align: top">
+                            <div style="color: #2c3e50; font-size: 16px">
+                                <strong>{{exchange_name}} 多币种利率提醒</strong>
+                            </div>
+                            <div style="color: #cccccc; font-size: 13px">{{detection_time}}</div>
+                            <p style="font-size: 16px">检测到 <strong style="color: #e74c3c;">{{alert_count}}</strong> 个币种利率超过您设定的阈值</p>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- 超过阈值的币种列表 -->
+            <div style="margin-top: 20px;">
+                <h4 style="margin: 0 0 15px 0; color: #e74c3c; font-size: 18px;">🚨 触发提醒的币种</h4>
+
+                <!-- 示例币种1 -->
+                <div style="
+                    margin-bottom: 20px;
+                    padding: 15px;
+                    background-color: #ffe5e5;
+                    border-left: 4px solid #e74c3c;
+                    border-radius: 5px;
+                ">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="width: 80px; vertical-align: middle;">
+                                <div style="
+                                    padding: 8px;
+                                    background-color: #e74c3c;
+                                    color: white;
+                                    text-align: center;
+                                    border-radius: 4px;
+                                    font-weight: bold;
+                                    font-size: 14px;
+                                ">CFX</div>
+                            </td>
+                            <td style="padding: 0 15px; vertical-align: top;">
+                                <div style="color: #2c3e50;">
+                                    <strong>当前利率: <span style="color: #e74c3c; font-size: 18px;">5.0%</span></strong>
+                                </div>
+                                <div style="color: #7f8c8d; font-size: 14px;">
+                                    阈值: <span style="color: #27ae60;">4.0%</span>
+                                    (超出 <span style="color: #e74c3c; font-weight: bold;">+1.0%</span>)
+                                </div>
+                                <div style="margin-top: 8px;">
+                                    <span style="font-size: 12px; color: #95a5a6;">
+                                        年利率: 5.0% | 日利率: 0.014% | 小时利率: 0.0006%
+                                    </span>
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+
+                    <!-- 最近5次数据表格 -->
+                    <div style="margin-top: 15px;">
+                        <h5 style="margin: 0 0 8px 0; font-size: 13px; color: #2c3e50;">📈 最近5次数据</h5>
+                        <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+                            <thead>
+                                <tr style="background-color: #ffebeb;">
+                                    <th style="padding: 6px; text-align: left; border: 1px solid #ffcdd2;">时间</th>
+                                    <th style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">年利率</th>
+                                    <th style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">日利率</th>
+                                    <th style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">小时利率</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td style="padding: 6px; border: 1px solid #ffcdd2;">2025-10-04 14:00</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2; color: #e74c3c; font-weight: bold;">5.0%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.014%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.0006%</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 6px; border: 1px solid #ffcdd2;">2025-10-04 13:00</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">4.8%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.013%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.0005%</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 6px; border: 1px solid #ffcdd2;">2025-10-04 12:00</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">4.5%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.012%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.0005%</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 6px; border: 1px solid #ffcdd2;">2025-10-04 11:00</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">4.2%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.012%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.0005%</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 6px; border: 1px solid #ffcdd2;">2025-10-04 10:00</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">4.0%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.011%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.0005%</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 示例币种2 -->
+                <div style="
+                    margin-bottom: 20px;
+                    padding: 15px;
+                    background-color: #ffe5e5;
+                    border-left: 4px solid #e74c3c;
+                    border-radius: 5px;
+                ">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="width: 80px; vertical-align: middle;">
+                                <div style="
+                                    padding: 8px;
+                                    background-color: #e74c3c;
+                                    color: white;
+                                    text-align: center;
+                                    border-radius: 4px;
+                                    font-weight: bold;
+                                    font-size: 14px;
+                                ">IOST</div>
+                            </td>
+                            <td style="padding: 0 15px; vertical-align: top;">
+                                <div style="color: #2c3e50;">
+                                    <strong>当前利率: <span style="color: #e74c3c; font-size: 18px;">8.0%</span></strong>
+                                </div>
+                                <div style="color: #7f8c8d; font-size: 14px;">
+                                    阈值: <span style="color: #27ae60;">6.0%</span>
+                                    (超出 <span style="color: #e74c3c; font-weight: bold;">+2.0%</span>)
+                                </div>
+                                <div style="margin-top: 8px;">
+                                    <span style="font-size: 12px; color: #95a5a6;">
+                                        年利率: 8.0% | 日利率: 0.022% | 小时利率: 0.0009%
+                                    </span>
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+
+                    <!-- 最近5次数据表格 -->
+                    <div style="margin-top: 15px;">
+                        <h5 style="margin: 0 0 8px 0; font-size: 13px; color: #2c3e50;">📈 最近5次数据</h5>
+                        <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+                            <thead>
+                                <tr style="background-color: #ffebeb;">
+                                    <th style="padding: 6px; text-align: left; border: 1px solid #ffcdd2;">时间</th>
+                                    <th style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">年利率</th>
+                                    <th style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">日利率</th>
+                                    <th style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">小时利率</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td style="padding: 6px; border: 1px solid #ffcdd2;">2025-10-04 14:00</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2; color: #e74c3c; font-weight: bold;">8.0%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.022%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.0009%</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 6px; border: 1px solid #ffcdd2;">2025-10-04 13:00</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">7.5%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.021%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.0009%</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 6px; border: 1px solid #ffcdd2;">2025-10-04 12:00</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">7.2%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.020%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.0008%</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 6px; border: 1px solid #ffcdd2;">2025-10-04 11:00</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">6.8%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.019%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.0008%</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 6px; border: 1px solid #ffcdd2;">2025-10-04 10:00</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">6.5%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.018%</td>
+                                    <td style="padding: 6px; text-align: center; border: 1px solid #ffcdd2;">0.0008%</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 所有监控币种的当前状态 -->
+            <div style="margin-top: 25px;">
+                <h4 style="margin: 0 0 15px 0; color: #27ae60; font-size: 18px;">📊 所有监控币种状态</h4>
+                <table style="width: 100%; border-collapse: collapse; background-color: #f8f9fa; border-radius: 5px; overflow: hidden;">
+                    <thead>
+                        <tr style="background-color: #e9ecef;">
+                            <th style="padding: 12px 8px; text-align: left; border-bottom: 2px solid #dee2e6; font-weight: bold;">币种</th>
+                            <th style="padding: 12px 8px; text-align: center; border-bottom: 2px solid #dee2e6; font-weight: bold;">当前利率</th>
+                            <th style="padding: 12px 8px; text-align: center; border-bottom: 2px solid #dee2e6; font-weight: bold;">阈值</th>
+                            <th style="padding: 12px 8px; text-align: center; border-bottom: 2px solid #dee2e6; font-weight: bold;">状态</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="border-bottom: 1px solid #dee2e6;">
+                            <td style="padding: 10px 8px; font-weight: bold;">CFX</td>
+                            <td style="padding: 10px 8px; text-align: center;">
+                                <span style="color: #e74c3c; font-weight: bold;">5.0%</span>
+                            </td>
+                            <td style="padding: 10px 8px; text-align: center;">4.0%</td>
+                            <td style="padding: 10px 8px; text-align: center;">
+                                <span style="color: #e74c3c; font-weight: bold;">⚠️ 超过阈值</span>
+                            </td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #dee2e6;">
+                            <td style="padding: 10px 8px; font-weight: bold;">IOST</td>
+                            <td style="padding: 10px 8px; text-align: center;">
+                                <span style="color: #e74c3c; font-weight: bold;">8.0%</span>
+                            </td>
+                            <td style="padding: 10px 8px; text-align: center;">6.0%</td>
+                            <td style="padding: 10px 8px; text-align: center;">
+                                <span style="color: #e74c3c; font-weight: bold;">⚠️ 超过阈值</span>
+                            </td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #dee2e6;">
+                            <td style="padding: 10px 8px; font-weight: bold;">USDT</td>
+                            <td style="padding: 10px 8px; text-align: center;">
+                                <span style="color: #2c3e50; font-weight: bold;">7.09%</span>
+                            </td>
+                            <td style="padding: 10px 8px; text-align: center;">8.0%</td>
+                            <td style="padding: 10px 8px; text-align: center;">
+                                <span style="color: #27ae60;">✅ 正常</span>
+                            </td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #dee2e6;">
+                            <td style="padding: 10px 8px; font-weight: bold;">USDC</td>
+                            <td style="padding: 10px 8px; text-align: center;">
+                                <span style="color: #2c3e50; font-weight: bold;">6.5%</span>
+                            </td>
+                            <td style="padding: 10px 8px; text-align: center;">7.0%</td>
+                            <td style="padding: 10px 8px; text-align: center;">
+                                <span style="color: #27ae60;">✅ 正常</span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div style="margin-top: 25px; text-align: center;">
+                <a href="#" style="
+                    display: inline-block;
+                    padding: 12px 24px;
+                    background-color: #007bff;
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 5px;
+                    font-weight: bold;
+                ">查看详细监控面板</a>
+            </div>
+
+            <div style="margin-top: 20px; padding: 15px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 5px;">
+                <h5 style="margin: 0 0 10px 0; color: #856404; font-size: 14px;">💡 监控设置信息</h5>
+                <ul style="margin: 5px 0; padding-left: 20px; color: #856404; font-size: 13px;">
+                    <li>监控交易所: Binance</li>
+                    <li>检查间隔: 每小时</li>
+                    <li>监控币种数量: 4 个</li>
+                    <li>下次检查时间: 2025-10-04 15:00:00</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 邮件底部 -->
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; border-top: 1px solid #dee2e6;">
+            <p style="margin: 0 0 10px 0; color: #6c757d; font-size: 12px;">
+                此邮件由CoinGlass利率监控系统自动发送
+            </p>
+            <p style="margin: 0; color: #6c757d; font-size: 11px;">
+                如不想接收此类邮件，请<a href="#" style="color: #6c757d; text-decoration: underline;">点击此处取消订阅</a>
+            </p>
+        </div>
+    </div>
+</body>
+</html>
