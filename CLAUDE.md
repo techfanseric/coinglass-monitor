@@ -28,6 +28,7 @@ This is a CoinGlass interest rate monitoring system based on a local Express ser
 - **本地文件存储**：使用本地文件系统存储配置、状态和邮件历史数据
 - **Hysteresis 通知系统**：通过智能冷却期防止垃圾邮件，保持原有状态机逻辑
 - **跨平台支持**：支持Windows、macOS和Linux部署，统一配置系统
+- **一键部署脚本**：提供Windows PowerShell和macOS Bash脚本，自动安装依赖和启动服务
 - **Puppeteer数据抓取**：使用Stealth插件避免反爬虫检测，支持调试截图
 - **EmailJS 集成**：EmailJS邮件通知系统，支持多币种通知模板
 - **定时监控服务**：集成在Express服务器中的定时任务系统，支持灵活触发时间
@@ -48,8 +49,8 @@ npm run monitor         # Run monitoring service standalone
 
 ### Platform-specific Deployment
 ```bash
-npm run deploy:windows  # Copy Windows env config and start server
-npm run deploy:mac      # Copy macOS env config and start server
+npm run deploy:windows  # Windows 一键部署 (自动安装依赖和启动服务)
+npm run deploy:mac      # macOS 一键部署 (自动安装依赖和启动服务)
 npm run setup           # Run general setup script
 npm run setup:windows   # Run Windows-specific setup script (Chrome detection, directory creation)
 npm run setup:mac       # Run macOS-specific setup script
@@ -231,7 +232,9 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 - 要运行完整监控，需要启动主服务器 (`npm start` 或 `npm run dev`)
 
 ### 脚本说明
-- `scripts/setup-simple.js` ✅ 推荐的配置脚本（自动检测 Chrome 路径）
+- `scripts/deploy-windows.ps1` ✅ Windows 一键部署脚本（推荐新用户使用）
+- `scripts/deploy-mac.sh` ✅ macOS 一键部署脚本（推荐新用户使用）
+- `scripts/setup-simple.js` 基础配置脚本（自动检测 Chrome 路径）
 - `scripts/setup-windows.js` Windows 特定配置脚本
 - `scripts/setup-mac.js` macOS 特定配置脚本
 - `scripts/start-windows.bat` Windows 启动脚本
@@ -239,7 +242,14 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 - `scripts/cleanup.js` 清理脚本（在package.json中引用）
 
 ### 配置文件使用说明
-**新用户配置**：
+**新用户配置（推荐方式）**：
+1. 克隆项目到本地
+2. 运行一键部署命令：
+   - **Windows**: `npm run deploy:windows`
+   - **macOS**: `npm run deploy:mac`
+3. 等待自动安装完成，配置 .env 文件中的 EmailJS 参数
+
+**手动配置方式**：
 1. 复制 `.env.example` 为 `.env`
 2. 运行 `npm run setup` 自动配置 Chrome 路径和创建必要目录
 3. 编辑 `.env` 文件，主要配置 `EMAILJS_PRIVATE_KEY` 和其他必要参数
