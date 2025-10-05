@@ -28,7 +28,7 @@ This is a CoinGlass interest rate monitoring system based on a local Express ser
 - **本地文件存储**：使用本地文件系统存储配置、状态和邮件历史数据
 - **Hysteresis 通知系统**：通过智能冷却期防止垃圾邮件，保持原有状态机逻辑
 - **跨平台支持**：支持Windows、macOS和Linux部署，统一配置系统
-- **一键部署脚本**：提供Windows PowerShell和macOS Bash脚本，自动安装依赖和启动服务
+- **启动脚本**：提供Windows PowerShell和macOS Bash脚本，智能环境检测和启动服务
 - **Puppeteer数据抓取**：使用Stealth插件避免反爬虫检测，支持调试截图
 - **EmailJS 集成**：EmailJS邮件通知系统，支持多币种通知模板
 - **定时监控服务**：集成在Express服务器中的定时任务系统，支持灵活触发时间
@@ -47,25 +47,27 @@ npm run dev:debug       # Start server with Node.js debugger
 npm run monitor         # Run monitoring service standalone
 ```
 
-### Platform-specific Deployment
+### Platform-specific Scripts
 ```bash
-npm run deploy:windows  # Windows 一键部署 (自动安装依赖和启动服务)
-npm run deploy:mac      # macOS 一键部署 (自动安装依赖和启动服务)
 npm run setup           # Run general setup script
 npm run setup:windows   # Run Windows-specific setup script (Chrome detection, directory creation)
 npm run setup:mac       # Run macOS-specific setup script
 npm run cleanup         # Run cleanup script (Note: cleanup.js script referenced but may not exist)
 ```
 
-### Online Installation
+### Application Startup
 ```bash
-# Windows - One-command installation
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/techfanseric/coinglass-monitor/main/scripts/deploy-windows.ps1" -OutFile "deploy.ps1"
-Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
-.\deploy.ps1
+# Windows PowerShell startup script (recommended)
+.\scripts\start-windows.ps1
 
-# macOS - One-command installation
-curl -fsSL https://raw.githubusercontent.com/techfanseric/coinglass-monitor/main/scripts/deploy-mac.sh | bash
+# macOS Bash startup script
+./scripts/start-mac.sh
+
+# Standard npm commands
+npm start               # Start production server
+npm run dev             # Start development server
+npm run dev:debug       # Start server with Node.js debugger
+npm run monitor         # Run monitoring service standalone
 ```
 
 ### Testing and Debugging
@@ -243,83 +245,55 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 - 要运行完整监控，需要启动主服务器 (`npm start` 或 `npm run dev`)
 
 ### 脚本说明
-- `scripts/deploy-windows.ps1` ✅ Windows 一键部署脚本（自动克隆和安装依赖）
-- `scripts/deploy-mac.sh` ✅ macOS 一键部署脚本（自动克隆和安装依赖）
+- `scripts/start-windows.ps1` ✅ Windows PowerShell 启动脚本（推荐）
+- `scripts/start-mac.sh` ✅ macOS Bash 启动脚本
 - `scripts/setup-simple.js` 基础配置脚本（自动检测 Chrome 路径）
 - `scripts/setup-windows.js` Windows 特定配置脚本
 - `scripts/setup-mac.js` macOS 特定配置脚本
-- `scripts/start-windows.bat` Windows 启动脚本
-- `scripts/start-mac.sh` macOS 启动脚本
 - `scripts/cleanup.js` 清理脚本（在package.json中引用）
 
 ### 配置文件使用说明
 
-#### 🚀 一键部署（推荐）
-**适用场景**：全新系统，任何目录下都可以直接安装
+#### 🔧 启动脚本使用
 
-**Windows 用户**：
+**Windows PowerShell 启动脚本**：
 ```powershell
-# 方法1：在线直接运行
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/techfanseric/coinglass-monitor/main/scripts/deploy-windows.ps1" -OutFile "deploy.ps1"
-Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
-.\deploy.ps1
+# 基础启动
+.\scripts\start-windows.ps1
 
-# 方法2：克隆项目后运行
-git clone https://github.com/techfanseric/coinglass-monitor.git
-cd coinglass-monitor
-npm run deploy:windows
-```
-
-**macOS 用户**：
-```bash
-# 方法1：在线直接运行
-curl -fsSL https://raw.githubusercontent.com/techfanseric/coinglass-monitor/main/scripts/deploy-mac.sh | bash
-
-# 方法2：克隆项目后运行
-git clone https://github.com/techfanseric/coinglass-monitor.git
-cd coinglass-monitor
-npm run deploy:mac
-```
-
-**特点**：
-- ✅ 从零开始，自动安装所有依赖
-- ✅ 自动克隆项目到本地
-- ✅ 智能检测系统环境
-- ✅ 自动安装 Node.js、Git、Chrome
-- ✅ 适合全新系统部署
-
----
-
-#### 💻 高级选项
-
-**Windows PowerShell 参数**：
-```powershell
 # 开发模式
-.\scripts\deploy-windows.ps1 -DevMode
+.\scripts\start-windows.ps1 -Dev
 
-# 指定端口
-.\scripts\deploy-windows.ps1 -Port 8080
+# 调试模式
+.\scripts\start-windows.ps1 -Debug
 
-# 跳过某些检查
-.\scripts\deploy-windows.ps1 -SkipNodeInstall -SkipChromeCheck
+# 自定义端口
+.\scripts\start-windows.ps1 -Port 8080
+
+# 组合参数
+.\scripts\start-windows.ps1 -Dev -Port 8080
 ```
 
-**macOS Bash 参数**：
+**macOS Bash 启动脚本**：
 ```bash
+# 基础启动
+./scripts/start-mac.sh
+
 # 开发模式
-./scripts/deploy-mac.sh --dev
+./scripts/start-mac.sh --dev
 
-# 指定端口
-./scripts/deploy-mac.sh --port 8080
+# 调试模式
+./scripts/start-mac.sh --debug
 
-# 跳过某些检查
-./scripts/deploy-mac.sh --skip-node-install --skip-chrome-check
+# 自定义端口
+./scripts/start-mac.sh --port 8080
 ```
 
-**特点**：
-- ✅ 自动检测和安装 Node.js、Git、Chrome
-- ✅ 智能处理环境配置
-- ✅ 支持开发模式和自定义端口
+**启动脚本功能**：
+- ✅ 自动检测 Node.js 和 npm 版本
+- ✅ 智能端口冲突处理
+- ✅ 自动创建必要目录
+- ✅ 依赖检查和更新提醒
 - ✅ 完善的错误处理和用户提示
 
 ---
