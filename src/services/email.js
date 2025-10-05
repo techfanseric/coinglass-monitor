@@ -33,6 +33,54 @@ function calculateNextCheckTime(config) {
 }
 
 /**
+ * 生成完整的监控设置信息
+ */
+function generateMonitoringSettingsInfo(config) {
+  const triggerSettings = config?.trigger_settings || { hourly_minute: 0, daily_time: '09:00' };
+  const notificationHours = config?.notification_hours || { enabled: false, start: '09:00', end: '18:00' };
+  const coins = config?.coins || [];
+
+  // 获取启用的币种数量
+  const enabledCoinsCount = coins.filter(coin => coin.enabled).length;
+
+  // 获取交易所信息（去重）
+  const exchanges = [...new Set(coins.map(coin => coin.exchange))];
+
+  // 生成触发时间描述
+  const triggerDescriptions = [];
+  if (triggerSettings.hourly_minute !== undefined) {
+    triggerDescriptions.push(`每小时第${triggerSettings.hourly_minute}分钟`);
+  }
+  if (triggerSettings.daily_time) {
+    triggerDescriptions.push(`每日${triggerSettings.daily_time}`);
+  }
+
+  // 生成通知时间描述
+  let notificationDescription = '24小时';
+  if (notificationHours.enabled) {
+    notificationDescription = `${notificationHours.start} - ${notificationHours.end}`;
+  }
+
+  // 生成重复间隔描述
+  const repeatInterval = config?.repeat_interval || 180;
+  let repeatDescription = `${repeatInterval}分钟`;
+  if (repeatInterval >= 60) {
+    repeatDescription = `${Math.floor(repeatInterval / 60)}小时${repeatInterval % 60 > 0 ? repeatInterval % 60 + '分钟' : ''}`;
+  }
+
+  return {
+    exchanges: exchanges.join(', '),
+    trigger_times: triggerDescriptions.join(', ') || '未设置',
+    enabled_coins_count: enabledCoinsCount,
+    total_coins_count: coins.length,
+    notification_hours: notificationDescription,
+    repeat_interval: repeatDescription,
+    monitoring_enabled: config?.monitoring_enabled !== false,
+    next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN')
+  };
+}
+
+/**
  * 发送警报邮件
  */
 export async function sendAlert(env, coin, currentRate, rateData, config) {
@@ -92,7 +140,7 @@ export async function sendRecovery(env, coin, currentRate, config) {
     };
 
     // 准备邮件数据
-    const emailData = prepareRecoveryEmail(recoveryData, env);
+    const emailData = prepareRecoveryEmail(recoveryData, env, config);
 
     // 发送邮件
     const success = await sendEmailJS(env, emailData);
@@ -156,23 +204,7 @@ export async function sendTestEmail(email) {
  * 准备警报邮件数据
  */
 function prepareAlertEmail(alertData, env, config = null) {
-  // 找出所有超过阈值的币种
-  const alertTriggeredCoins = Object.entries(alertData.all_coins)
-    .filter(([symbol, data]) => data.annual_rate > alertData.threshold)
-    .map(([symbol, data]) => ({
-      symbol,
-      rate: data.annual_rate.toFixed(emailConfig.currencyDecimalPlaces)
-    }))
-    .sort((a, b) => b.rate - a.rate); // 按利率从高到低排序
-
-  // 生成标题：时间 | 币种1(利率1) 币种2(利率2) ...
-  const coinSummaries = alertTriggeredCoins.slice(0, 3).map(coin => `${coin.symbol}(${coin.rate}%)`).join(' ');
-  const title = `${new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })} | ${coinSummaries}${alertTriggeredCoins.length > 3 ? '...' : ''}`;
-
-  // 计算主要触发币种的超出百分比
-  const excess = ((alertData.current_rate - alertData.threshold) / alertData.threshold * 100).toFixed(emailConfig.percentageDecimalPlaces);
-
-  // 构建触发币种数组（包含所有超过阈值的币种）
+  // 构建触发币种数组（包含所有超过阈值的币种）- 使用与内容生成相同的逻辑
   const triggeredCoins = Object.entries(alertData.all_coins)
     .filter(([symbol, data]) => {
       // 查找该币种在配置中的阈值
@@ -212,6 +244,12 @@ function prepareAlertEmail(alertData, env, config = null) {
     })
     .sort((a, b) => parseFloat(b.current_rate) - parseFloat(a.current_rate)); // 按利率从高到低排序
 
+  // 生成标题：时间 | 币种1(利率1) 币种2(利率2) ...
+  // 使用与内容相同的触发币种列表，确保一致性
+  const maxCoinsInTitle = 4; // 增加到4个币种，因为你有3个币种触发
+  const coinSummaries = triggeredCoins.slice(0, maxCoinsInTitle).map(coin => `${coin.symbol}(${coin.current_rate}%)`).join(' ');
+  const title = `${new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })} | ${coinSummaries}${triggeredCoins.length > maxCoinsInTitle ? '...' : ''}`;
+
   // 构建所有币种状态数组
   const allCoinsStatus = Object.entries(alertData.all_coins).map(([symbol, data]) => {
     // 查找该币种在配置中的阈值
@@ -226,6 +264,9 @@ function prepareAlertEmail(alertData, env, config = null) {
     };
   });
 
+  // 生成完整的监控设置信息
+  const monitoringSettings = generateMonitoringSettingsInfo(config);
+
   return {
     service_id: env.EMAILJS_SERVICE_ID,
     template_id: env.EMAILJS_TEMPLATE_ID,
@@ -236,12 +277,14 @@ function prepareAlertEmail(alertData, env, config = null) {
       exchange_name: alertData.exchange,
       detection_time: alertData.detection_time,
       // 多币种数组结构
-      triggered_count: alertTriggeredCoins.length,
+      triggered_count: triggeredCoins.length,
       triggered_coins: triggeredCoins,
       all_coins_status: allCoinsStatus,
       total_coins: Object.keys(alertData.all_coins).length,
       check_interval: '每小时',
-      next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN')
+      next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN'),
+      // 完整的监控设置信息
+      monitoring_settings: monitoringSettings
     }
   };
 }
@@ -249,7 +292,7 @@ function prepareAlertEmail(alertData, env, config = null) {
 /**
  * 准备回落通知邮件数据
  */
-function prepareRecoveryEmail(recoveryData, env) {
+function prepareRecoveryEmail(recoveryData, env, config = null) {
   const title = `${new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })} | ${recoveryData.coin}-回落通知`;
 
   // 构建触发币种数组（回落通知时币种在正常范围内）
@@ -271,6 +314,18 @@ function prepareRecoveryEmail(recoveryData, env) {
     is_above_threshold: false
   }];
 
+  // 生成监控设置信息（如果有配置则使用配置，否则使用默认值）
+  const monitoringSettings = config ? generateMonitoringSettingsInfo(config) : {
+    exchanges: 'CoinGlass',
+    trigger_times: '未设置',
+    enabled_coins_count: 1,
+    total_coins_count: 1,
+    notification_hours: '24小时',
+    repeat_interval: '3小时',
+    monitoring_enabled: true,
+    next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN')
+  };
+
   return {
     service_id: env.EMAILJS_SERVICE_ID,
     template_id: env.EMAILJS_TEMPLATE_ID,
@@ -286,7 +341,9 @@ function prepareRecoveryEmail(recoveryData, env) {
       all_coins_status: allCoinsStatus,
       total_coins: 1,
       check_interval: '每小时',
-      next_check_time: calculateNextCheckTime().toLocaleString('zh-CN')
+      next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN'),
+      // 完整的监控设置信息
+      monitoring_settings: monitoringSettings
     }
   };
 }
@@ -296,6 +353,18 @@ function prepareRecoveryEmail(recoveryData, env) {
  */
 function prepareTestEmail(testData) {
   const title = `${new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })} | CoinGlass监控系统测试`;
+
+  // 测试邮件的默认监控设置
+  const testMonitoringSettings = {
+    exchanges: 'CoinGlass',
+    trigger_times: '未设置',
+    enabled_coins_count: 1,
+    total_coins_count: 1,
+    notification_hours: '24小时',
+    repeat_interval: '3小时',
+    monitoring_enabled: true,
+    next_check_time: calculateNextCheckTime().toLocaleString('zh-CN')
+  };
 
   return {
     service_id: process.env.EMAILJS_SERVICE_ID,
@@ -325,7 +394,9 @@ function prepareTestEmail(testData) {
       }],
       total_coins: 1,
       check_interval: '每小时',
-      next_check_time: calculateNextCheckTime().toLocaleString('zh-CN')
+      next_check_time: calculateNextCheckTime().toLocaleString('zh-CN'),
+      // 完整的监控设置信息
+      monitoring_settings: testMonitoringSettings
     }
   };
 }
@@ -448,3 +519,6 @@ export const emailService = {
   sendTestEmail,
   sendMultiCoinAlert
 };
+
+// 导出测试用的函数
+export { generateMonitoringSettingsInfo };

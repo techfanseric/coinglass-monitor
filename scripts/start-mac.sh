@@ -69,7 +69,6 @@ echo "- 前端界面: http://localhost:3001"
 echo "- API接口: http://localhost:3001/api"
 echo "- 健康检查: http://localhost:3001/health"
 echo ""
-echo "按 Ctrl+C 停止服务"
 echo ""
 
 npm start

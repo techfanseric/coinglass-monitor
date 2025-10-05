@@ -18,7 +18,7 @@
       "symbol": "BTC",
       "exchange": "binance",
       "timeframe": "1h",
-      "threshold": 0.4,
+      "threshold": 0.2,
       "enabled": true
     },
     {
@@ -26,6 +26,13 @@
       "exchange": "okx",
       "timeframe": "1h",
       "threshold": 4,
+      "enabled": true
+    },
+    {
+      "symbol": "USDT",
+      "exchange": "binance",
+      "timeframe": "24h",
+      "threshold": 1,
       "enabled": true
     }
   ],

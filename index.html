@@ -322,19 +322,64 @@
             background: #c53030;
         }
 
-        .edit-btn {
-            background: #3182ce;
-            color: white;
-            border: none;
+        .more-menu {
+            position: relative;
+            display: inline-block;
+        }
+
+        .more-btn {
+            background: #ffffff;
+            color: #4a5568;
+            border: 1px solid #cbd5e0;
             padding: 4px 8px;
             border-radius: 4px;
             cursor: pointer;
             font-size: 0.75em;
-            margin-right: 4px;
         }
 
-        .edit-btn:hover {
-            background: #2c5282;
+        .more-btn:hover {
+            background: #f8fafc;
+            border-color: #a0aec0;
+        }
+
+        .more-dropdown {
+            position: absolute;
+            right: 0;
+            top: 100%;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            min-width: 120px;
+            display: none;
+        }
+
+        .more-dropdown.show {
+            display: block;
+        }
+
+        .more-dropdown-item {
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 0.75em;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+            color: #374151;
+        }
+
+        .more-dropdown-item:hover {
+            background: #f3f4f6;
+        }
+
+        .more-dropdown-item.danger {
+            color: #dc2626;
+        }
+
+        .more-dropdown-item.danger:hover {
+            background: #fef2f2;
         }
 
         .cooldown-btn {
@@ -650,8 +695,8 @@
                 loadStatus();
             });
 
-            // 按配置间隔更新状态
-            setInterval(loadStatus, frontendConfig.updateInterval);
+            // 按配置间隔更新状态，保持触发按钮状态
+            setInterval(() => loadStatus(true), frontendConfig.updateInterval);
         });
 
         // 添加监控
@@ -830,13 +875,13 @@
         }
 
         // 加载状态
-        async function loadStatus() {
+        async function loadStatus(preserveTriggerState = false) {
             try {
                 const response = await fetch(`${API_BASE}/api/status`);
                 const data = await response.json();
 
                 updateSystemStatus(true);
-                displayStatus(data);
+                displayStatus(data, preserveTriggerState);
             } catch (error) {
                 console.error('加载状态失败:', error);
                 updateSystemStatus(false);
@@ -851,7 +896,7 @@
         }
 
         // 显示监控列表
-        function displayStatus(data) {
+        function displayStatus(data, preserveTriggerState = false) {
             const container = document.getElementById('monitorList');
             const config = currentConfig || {};
 
@@ -864,6 +909,21 @@
             if (!config.coins || config.coins.length === 0) {
                 container.innerHTML = '<p style="text-align: center; color: #6b7280;">暂无监控项目</p>';
                 return;
+            }
+
+            // 保存触发按钮状态（如果需要保持）
+            let triggerBtnState = null;
+            if (preserveTriggerState) {
+                const triggerBtn = document.getElementById('triggerBtn');
+                const triggerStatus = document.getElementById('triggerStatus');
+                if (triggerBtn && triggerBtn.disabled) {
+                    triggerBtnState = {
+                        disabled: true,
+                        text: triggerBtn.textContent,
+                        statusText: triggerStatus ? triggerStatus.textContent : '',
+                        statusVisible: triggerStatus ? triggerStatus.style.display !== 'none' : false
+                    };
+                }
             }
 
             let html = '';
@@ -904,39 +964,55 @@
                     }
                 }
 
-                // 判断是否显示暂停/继续按钮（在警报状态时显示）
-                const showPauseBtn = state.status === 'alert';
-                const pauseBtn = showPauseBtn ?
-                    '<button onclick="togglePause(\'' + coin.symbol + '\')" class="cooldown-btn" title="暂停/继续通知">' +
-                        '<svg class="cooldown-icon" viewBox="0 0 24 24">' +
-                            '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>' +
-                        '</svg>' +
-                    '</button>' : '';
+                // 判断是否显示冷却期重置选项（只有在冷却中状态时显示）
+                const showCooldownOption = state.status !== 'alert' && state.status !== 'normal';
 
                 html += '<div class="monitor-item">' +
                         '<div class="monitor-info">' +
-                            '<strong>' + coin.exchange + ' - ' + coin.symbol + '</strong> ' +
-                            '<span class="timeframe">(' + timeframeText + ')</span>' +
+                            '<strong>' + coin.exchange + ' - ' + coin.symbol + '</strong>' +
                             '<div class="secondary-info">' +
-                            '阈值: ' + coin.threshold + '% | 状态: ' +
-                            '<span class="status-text" style="color: ' + statusClass + ';">' + statusText + '</span>' +
+                            '阈值: ' + coin.threshold + '% | 颗粒度: ' + timeframeText +
                             nextNotificationText +
                         '</div>' +
                         '</div>' +
                         '<div class="monitor-actions">' +
-                            pauseBtn +
-                            '<button onclick="editMonitor(' + index + ')" class="edit-btn">编辑</button>' +
-                            '<button onclick="removeMonitor(' + index + ')" class="remove-btn">删除</button>' +
+                            '<div class="more-menu">' +
+                                '<button onclick="toggleMoreMenu(' + index + ')" class="more-btn">⋮</button>' +
+                                '<div id="moreMenu_' + index + '" class="more-dropdown">' +
+                                    (showCooldownOption ?
+                                        '<button onclick="togglePause(\'' + coin.symbol + '\', ' + index + ')" class="more-dropdown-item">重置冷却期</button>' : ''
+                                    ) +
+                                    '<button onclick="editMonitor(' + index + ')" class="more-dropdown-item">编辑</button>' +
+                                    '<button onclick="removeMonitor(' + index + ')" class="more-dropdown-item danger">删除</button>' +
+                                '</div>' +
+                            '</div>' +
                         '</div>' +
                     '</div>';
             });
 
             container.innerHTML = html;
+
+            // 恢复触发按钮状态
+            if (triggerBtnState) {
+                const triggerBtn = document.getElementById('triggerBtn');
+                const triggerStatus = document.getElementById('triggerStatus');
+                if (triggerBtn) {
+                    triggerBtn.disabled = triggerBtnState.disabled;
+                    triggerBtn.textContent = triggerBtnState.text;
+                }
+                if (triggerStatus && triggerBtnState.statusVisible) {
+                    triggerStatus.style.display = 'inline';
+                    triggerStatus.textContent = triggerBtnState.statusText;
+                }
+            }
         }
 
   
         // 编辑监控
         function editMonitor(index) {
+            // 关闭菜单
+            closeAllMoreMenus();
+
             const config = currentConfig || {};
             if (config.coins && config.coins[index]) {
                 const coin = config.coins[index];
@@ -959,6 +1035,9 @@
 
         // 删除监控
         function removeMonitor(index) {
+            // 关闭菜单
+            closeAllMoreMenus();
+
             const config = currentConfig || {};
             if (config.coins && config.coins[index]) {
                 const coin = config.coins[index];
@@ -973,8 +1052,35 @@
             }
         }
 
+        // 切换更多菜单
+        function toggleMoreMenu(index) {
+            // 关闭所有其他菜单
+            const allMenus = document.querySelectorAll('.more-dropdown');
+            allMenus.forEach(menu => {
+                if (menu.id !== `moreMenu_${index}`) {
+                    menu.classList.remove('show');
+                }
+            });
+
+            // 切换当前菜单
+            const currentMenu = document.getElementById(`moreMenu_${index}`);
+            if (currentMenu) {
+                currentMenu.classList.toggle('show');
+            }
+        }
+
+        // 关闭所有更多菜单
+        function closeAllMoreMenus() {
+            const allMenus = document.querySelectorAll('.more-dropdown');
+            allMenus.forEach(menu => {
+                menu.classList.remove('show');
+            });
+        }
+
         // 暂停/继续通知
-        async function togglePause(coinSymbol) {
+        async function togglePause(coinSymbol, menuIndex) {
+            // 关闭菜单
+            closeAllMoreMenus();
             try {
                 const response = await fetch(`${API_BASE}/api/status/cooldown/reset`, {
                     method: 'POST',
@@ -1467,6 +1573,14 @@
         // 页面加载完成后启动日志轮询
         document.addEventListener('DOMContentLoaded', function() {
             startLogPolling();
+
+            // 点击页面其他地方关闭更多菜单
+            document.addEventListener('click', function(event) {
+                const isClickInsideMenu = event.target.closest('.more-menu');
+                if (!isClickInsideMenu) {
+                    closeAllMoreMenus();
+                }
+            });
         });
 
         // 页面卸载时清理
