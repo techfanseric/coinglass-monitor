@@ -1,32 +1,53 @@
 {
   "name": "coinglass-monitor",
-  "version": "1.0.0",
-  "description": "CoinGlass 利率监控提醒系统",
+  "version": "2.0.0",
+  "description": "CoinGlass 利率监控提醒系统 - Windows 本地部署版本",
   "type": "module",
-  "main": "src/index.js",
+  "main": "server/app.js",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy --env=\"\"",
-    "tail": "wrangler tail",
-    "test": "vitest"
+    "start": "node server/app.js",
+    "dev": "node --watch server/app.js",
+    "dev:debug": "node --inspect server/app.js",
+    "monitor": "node server/services/monitor.js",
+    "deploy:windows": "copy .env.windows .env && npm start",
+    "deploy:mac": "copy .env.mac .env && npm start",
+    "setup:windows": "node scripts/setup-windows.js",
+    "setup:mac": "node scripts/setup-mac.js",
+    "cleanup": "node scripts/cleanup.js",
+    "wrangler:dev": "wrangler dev",
+    "wrangler:deploy": "wrangler deploy --env=\"\"",
+    "wrangler:tail": "wrangler tail"
   },
   "keywords": [
-    "cloudflare",
-    "workers",
+    "coinglass",
     "monitoring",
     "cryptocurrency",
-    "rates"
+    "rates",
+    "puppeteer",
+    "express",
+    "windows",
+    "macos",
+    "local",
+    "deployment"
   ],
   "author": "Your Name",
   "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "node-cron": "^3.0.3",
+    "puppeteer": "^21.11.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "tslib": "^2.8.1",
+    "winston": "^3.11.0"
+  },
   "devDependencies": {
-    "@vitest/coverage-v8": "^1.0.0",
-    "@vitest/ui": "^1.0.0",
-    "msw": "^2.0.0",
-    "vitest": "^1.0.0",
+    "nodemon": "^3.0.2",
     "wrangler": "^4.42.0"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
   }
 }

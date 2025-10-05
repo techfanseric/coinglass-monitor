@@ -1,0 +1,27 @@
+{
+  "coin_USDT": {
+    "status": "alert",
+    "last_notification": "2025-10-05T13:05:58.968Z",
+    "next_notification": "2025-10-05T13:35:58.968Z",
+    "last_rate": 16.01,
+    "trigger_type": "manual",
+    "manual_trigger_at": "2025-10-05T13:05:58.968Z",
+    "updated_at": "2025-10-05T13:05:58.969Z"
+  },
+  "coin_BTC": {
+    "status": "normal",
+    "last_rate": 0.35,
+    "trigger_type": "manual",
+    "recovered_at": "2025-10-05T11:22:40.556Z",
+    "updated_at": "2025-10-05T11:22:42.337Z"
+  },
+  "coin_USDC": {
+    "status": "alert",
+    "last_notification": "2025-10-05T13:05:58.970Z",
+    "next_notification": "2025-10-05T13:35:58.970Z",
+    "last_rate": 7.39,
+    "trigger_type": "manual",
+    "manual_trigger_at": "2025-10-05T13:05:58.970Z",
+    "updated_at": "2025-10-05T13:05:58.971Z"
+  }
+}

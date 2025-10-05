@@ -1,134 +1,156 @@
-# 🚀 快速开始指南
+# CoinGlass 监控系统 - 快速开始指南
 
-## 一键自动化部署
+## 🚀 快速启动
 
-### Mac/Linux 用户
+### Mac 用户
+
 ```bash
-# 进入项目目录
+# 方法1: 进入项目目录后运行启动脚本
 cd /Users/ericyim/coinglass-monitor
+./scripts/start-mac.sh
 
-# 给脚本执行权限
-chmod +x deploy-with-env.sh
+# 方法2: 直接使用 npm 命令
+cd /Users/ericyim/coinglass-monitor
+npm run deploy:mac
 
-# 运行自动化部署脚本
-./deploy-with-env.sh
+# 方法3: 先配置环境再启动
+cd /Users/ericyim/coinglass-monitor
+node scripts/setup-mac.js
+npm start
 ```
 
+### Windows 用户
 
-## 📋 脚本会自动完成
+```cmd
+REM 方法1: 进入项目目录后运行启动脚本
+cd C:\path\to\coinglass-monitor
+scripts\start-windows.bat
 
-1. ✅ **检查环境** - Node.js 和 Wrangler CLI
-2. ✅ **登录验证** - Cloudflare 账号登录
-3. ✅ **创建 KV** - 自动创建4个 KV 命名空间
-4. ✅ **更新配置** - 自动更新 wrangler.toml
-5. ✅ **安装依赖** - npm install
-6. ✅ **部署 Worker** - 自动部署到 Cloudflare
-7. ✅ **添加配置** - 自动添加默认配置
-8. ✅ **测试验证** - 验证部署是否成功
+REM 方法2: 直接使用 npm 命令
+cd C:\path\to\coinglass-monitor
+npm run deploy:windows
 
-## 🔧 前置要求
-
-1. **Node.js** (必需)
-   - 下载地址: https://nodejs.org/
-   - 版本要求: >= 16.0.0
-
-2. **Cloudflare 账号** (必需)
-   - 免费账号即可
-   - 访问: https://dash.cloudflare.com
-
-## 🎯 部署完成后
-
-### 修改配置
-```bash
-# 方法1: 使用 API
-curl -X POST -H "Content-Type: application/json" \
-  -d '{"email":"your-email@example.com"}' \
-  https://coinglass-monitor.你的子域名.workers.dev/api/config
-
-# 方法2: 使用 Wrangler CLI
-wrangler kv:key get "user_settings" --namespace-id="你的CONFIG_KV_ID"
-# 编辑后重新上传
-wrangler kv:key put "user_settings" "新配置" --namespace-id="你的CONFIG_KV_ID"
+REM 方法3: 先配置环境再启动
+cd C:\path\to\coinglass-monitor
+node scripts\setup-windows.js
+npm start
 ```
 
-### 配置邮件通知（可选）
-```bash
-# 1. 访问 https://www.emailjs.com/ 注册账号
-# 2. 创建邮件服务和模板
-# 3. 复制 .env.example 为 .env 并填入你的配置
-cp .env.example .env
-# 编辑 .env 文件，填入你的 EmailJS 配置信息
+## 📋 系统要求
 
-# 4. 设置 Private Key (重要！)
-wrangler secret put EMAILJS_PRIVATE_KEY
-# 当提示时，输入你的 EmailJS Private Key
+- **Node.js** 18.0 或更高版本
+- **Chrome** 或 **Chromium** 浏览器
+- **npm** 包管理器
 
-# 5. 重新部署
-./deploy-with-env.sh
-```
+## ⚠️ 重要提醒
 
-### 查看日志
-```bash
-# 实时查看 Worker 日志
-wrangler tail
-```
+1. **必须在项目目录中运行脚本**
+   - 不要从主目录（`~`）运行启动脚本
+   - 确保当前目录包含 `package.json` 文件
 
-### 手动测试
-```bash
-# 运行邮件发送测试
-node send-test-email.js
+2. **首次运行**
+   - 系统会自动安装依赖
+   - 会自动创建必要的目录
+   - 会生成配置文件（如果不存在）
 
-# 或启动开发服务器
-npm run dev
-```
+3. **端口占用**
+   - 默认使用端口 3001
+   - 如果端口被占用，请修改 `.env` 文件中的 `PORT` 值
 
-## 📊 监控功能
+## 🔧 配置说明
 
-- ✅ **自动监控**: 每小时检查一次
-- ✅ **智能通知**: 支持时间段限制
-- ✅ **多币种**: 支持多个币种独立监控
-- ✅ **Hysteresis**: 避免垃圾邮件
-- ✅ **API 接口**: 完整的配置和状态管理
+### EmailJS 配置（可选）
+如果需要邮件通知功能：
 
-## 🔍 故障排除
+1. 访问 [EmailJS](https://www.emailjs.com/)
+2. 创建服务和邮件模板
+3. 更新 `.env.mac` 或 `.env.windows` 文件中的配置：
+   ```env
+   EMAILJS_SERVICE_ID=your_service_id
+   EMAILJS_TEMPLATE_ID=your_template_id
+   EMAILJS_PUBLIC_KEY=your_public_key
+   EMAILJS_PRIVATE_KEY=your_private_key
+   ```
+
+### 监控配置
+系统启动后访问 http://localhost:3001 进行配置：
+- 设置接收邮件的邮箱地址
+- 配置要监控的币种和阈值
+- 设置触发时间和通知规则
+
+## 📊 系统访问
+
+启动成功后，可以通过以下地址访问：
+
+- **前端界面**: http://localhost:3001
+- **API 文档**: http://localhost:3001/api
+- **健康检查**: http://localhost:3001/health
+
+## 🛠️ 故障排除
 
 ### 常见问题
 
-1. **Node.js 未安装**
+1. **脚本运行失败**
    ```bash
-   # Mac/Linux
-   # Mac: brew install node
-   # Linux: sudo apt-get install nodejs npm  # Ubuntu/Debian
-   # 或访问 https://nodejs.org/ 下载安装
+   # 确保在正确目录
+   pwd  # 应该显示 .../coinglass-monitor
+   ls  # 应该看到 package.json 文件
    ```
 
-2. **Wrangler 登录失败**
+2. **依赖安装失败**
    ```bash
-   wrangler auth login
+   # 清除 npm 缓存
+   npm cache clean --force
+
+   # 重新安装
+   npm install
    ```
 
-3. **权限不足**
-   - 确保你的 Cloudflare 账号有 Workers 权限
-   - 免费账号包含 Workers 权限
-
-4. **部署失败**
+3. **Chrome 未找到**
    ```bash
-   # 检查语法
-   wrangler dev
+   # Mac: 运行配置脚本自动检测
+   node scripts/setup-mac.js
 
-   # 重新部署
-   wrangler deploy
+   # Windows: 运行配置脚本自动检测
+   node scripts\setup-windows.js
    ```
 
-## 📞 需要帮助？
+4. **端口被占用**
+   ```bash
+   # 查看占用进程
+   lsof -i :3001  # Mac
 
-如果遇到任何问题，请：
+   # 修改端口
+   export PORT=3002
+   npm start
+   ```
 
-1. **查看日志**: `wrangler tail`
-2. **检查配置**: 确保 wrangler.toml 正确
-3. **重新部署**: `wrangler deploy`
-4. **联系支持**: 提供错误信息
+### 查看日志
+
+```bash
+# 实时查看日志
+tail -f logs/server.log
+
+# 查看完整日志
+cat logs/server.log
+```
+
+## 📞 技术支持
+
+如果遇到问题：
+
+1. 检查 **系统日志**: `logs/server.log`
+2. 运行 **健康检查**: http://localhost:3001/health
+3. 查看 **部署文档**: [DEPLOYMENT.md](DEPLOYMENT.md)
+4. 运行 **验证测试**: `node verification-test.js`
 
 ---
 
-**🎉 恭喜！你的利率监控系统已经启动了！**
+## 🎉 开始使用
+
+1. 确保在项目目录中：`cd /Users/ericyim/coinglass-monitor`
+2. 运行启动脚本：`./scripts/start-mac.sh`
+3. 访问：http://localhost:3001
+4. 配置您的监控规则
+
+**祝您使用愉快！** 🚀

@@ -42,3 +42,6 @@ build/
 # VSCode Counter
 .VSCodeCounter/
 .env.backup
+
+# 数据
+data
