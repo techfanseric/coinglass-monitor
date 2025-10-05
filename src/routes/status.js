@@ -4,6 +4,7 @@
  */
 
 import express from 'express';
+import path from 'path';
 import { storageService } from '../services/storage.js';
 import { loggerService } from '../services/logger.js';
 
@@ -368,8 +369,10 @@ router.get('/logs', async (req, res) => {
   try {
     // 静默处理日志请求，避免干扰系统日志
 
-    // 直接读取server.log文件
-    const logPath = './server.log';
+    // 使用正确的日志路径
+    const logPath = process.env.LOGS_DIR ?
+      path.join(process.env.LOGS_DIR, 'server.log') :
+      path.join(process.cwd(), 'logs', 'server.log');
 
     let logs = [];
     if (fsSync.existsSync(logPath)) {
@@ -473,7 +476,9 @@ router.post('/cooldown/reset', async (req, res) => {
 router.post('/logs/clear', async (req, res) => {
   try {
     // 清空server.log文件
-    const logPath = './server.log';
+    const logPath = process.env.LOGS_DIR ?
+      path.join(process.env.LOGS_DIR, 'server.log') :
+      path.join(process.cwd(), 'logs', 'server.log');
 
     if (fsSync.existsSync(logPath)) {
       fsSync.writeFileSync(logPath, '');

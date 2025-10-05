@@ -17,6 +17,29 @@ export class ScraperService {
   constructor() {
     this.browser = null;
     this.page = null;
+
+    // 从环境变量加载配置
+    this.config = {
+      windowWidth: parseInt(process.env.PUPPETEER_WINDOW_WIDTH) || 1920,
+      windowHeight: parseInt(process.env.PUPPETEER_WINDOW_HEIGHT) || 1080,
+      pageTimeout: parseInt(process.env.PUPPETEER_PAGE_TIMEOUT) || 30000,
+      navigationTimeout: parseInt(process.env.PUPPETEER_NAVIGATION_TIMEOUT) || 60000,
+      userAgent: process.env.PUPPETEER_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      coinglassBaseUrl: process.env.COINGLASS_BASE_URL || 'https://www.coinglass.com/zh/pro/i/MarginFeeChart',
+      waitTimes: {
+        initial: parseInt(process.env.COINGLASS_WAIT_TIME_INITIAL) || 5000,
+        exchange: parseInt(process.env.COINGLASS_WAIT_TIME_EXCHANGE) || 3000,
+        coin: parseInt(process.env.COINGLASS_WAIT_TIME_COIN) || 6000,
+        data: parseInt(process.env.COINGLASS_WAIT_TIME_DATA) || 3000,
+        screenshot: parseInt(process.env.COINGLASS_WAIT_TIME_SCREENSHOT) || 2000,
+        verification: parseInt(process.env.COINGLASS_WAIT_TIME_VERIFICATION) || 2000,
+        method: parseInt(process.env.COINGLASS_WAIT_TIME_METHOD) || 1000,
+        retry: parseInt(process.env.COINGLASS_WAIT_TIME_RETRY) || 500,
+        clear: parseInt(process.env.COINGLASS_WAIT_TIME_CLEAR) || 300,
+        optionSelect: parseInt(process.env.COINGLASS_WAIT_TIME_OPTION_SELECT) || 2500
+      },
+      screenshotDir: process.env.COINGLASS_SCREENSHOT_DIR || './data/debug-screenshots'
+    };
   }
 
   /**
@@ -57,7 +80,7 @@ export class ScraperService {
         '--disable-gpu',
         '--disable-web-security',
         '--disable-features=VizDisplayCompositor',
-        '--window-size=1920,1080'
+        `--window-size=${this.config.windowWidth},${this.config.windowHeight}`
       ]
     };
 
@@ -78,10 +101,10 @@ export class ScraperService {
     this.page = await this.browser.newPage();
 
     // 设置用户代理
-    await this.page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    await this.page.setUserAgent(this.config.userAgent);
 
     // 设置视窗大小
-    await this.page.setViewport({ width: 1920, height: 1080 });
+    await this.page.setViewport({ width: this.config.windowWidth, height: this.config.windowHeight });
 
     return this.page;
   }
@@ -103,21 +126,21 @@ export class ScraperService {
       // 初始化浏览器
       browser = await this.initBrowser();
       page = await browser.newPage();
-      await page.setViewport({ width: 1920, height: 1080 });
+      await page.setViewport({ width: this.config.windowWidth, height: this.config.windowHeight });
 
       console.log('📖 访问 CoinGlass 页面...');
-      await page.goto('https://www.coinglass.com/zh/pro/i/MarginFeeChart', {
+      await page.goto(this.config.coinglassBaseUrl, {
         waitUntil: 'networkidle2',
-        timeout: 30000
+        timeout: this.config.pageTimeout
       });
 
       console.log('⏳ 等待页面完全加载...');
-      await page.waitForTimeout(5000);
+      await page.waitForTimeout(this.config.waitTimes.initial);
 
       // === 切换交易所 ===
       console.log(`🔄 切换到交易所: ${exchange}`);
       await this.switchExchange(page, exchange);
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(this.config.waitTimes.exchange);
 
       // 确定要抓取的币种列表
       const coinsToScrape = requestedCoins || [coin];
@@ -127,13 +150,13 @@ export class ScraperService {
         console.log(`🔄 切换到币种: ${targetCoin}`);
         await this.switchCoin(page, targetCoin);
         // 等待页面数据更新，特别是切换币种后需要更长时间
-        await page.waitForTimeout(6000);
+        await page.waitForTimeout(this.config.waitTimes.coin);
 
         // === 切换时间框架 ===
         if (timeframe === '24h') {
           console.log(`🔄 切换到时间框架: ${timeframe}`);
           await this.switchTimeframe(page, timeframe);
-          await page.waitForTimeout(3000);
+          await page.waitForTimeout(this.config.waitTimes.data);
         }
 
         // 验证切换结果
@@ -147,7 +170,7 @@ export class ScraperService {
           if (switchVerification.currentCoin !== targetCoin) {
             console.log(`🔄 重试切换币种: ${switchVerification.currentCoin} -> ${targetCoin}`);
             await this.switchCoin(page, targetCoin);
-            await page.waitForTimeout(2000);
+            await page.waitForTimeout(this.config.waitTimes.screenshot);
           }
 
           const reVerification = await this.verifySwitchResult(page, exchange, targetCoin);
@@ -158,11 +181,11 @@ export class ScraperService {
         }
 
         // 等待页面数据完全更新
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(this.config.waitTimes.data);
 
         // 截图记录数据采集前的页面状态
         try {
-          const screenshotDir = './data/debug-screenshots';
+          const screenshotDir = this.config.screenshotDir;
           const screenshotPath = `${screenshotDir}/data-collection-${targetCoin}-${Date.now()}.png`;
 
           // 确保目录存在
@@ -187,7 +210,7 @@ export class ScraperService {
         }
 
         // 币种间添加短暂延迟，避免请求过于频繁
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(this.config.waitTimes.screenshot);
       }
 
       // 构建最终结果
@@ -298,10 +321,10 @@ export class ScraperService {
         return true;
       }, targetExchange);
 
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(this.config.waitTimes.exchange);
 
       // 验证切换是否成功
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(this.config.waitTimes.verification);
       console.log(`✅ 交易所切换操作完成: ${targetExchange}`);
 
     } catch (error) {
@@ -350,7 +373,7 @@ export class ScraperService {
         }
 
         // 在尝试下一个方法前等待页面稳定
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(this.config.waitTimes.method);
       }
 
       console.error(`❌ 所有方法都无法成功切换币种: ${coin}`);
@@ -380,14 +403,14 @@ export class ScraperService {
           if (input) {
             console.log(`📍 找到币种输入框: ${selector}`);
             await input.click();
-            await page.waitForTimeout(500);
+            await page.waitForTimeout(this.config.waitTimes.retry);
 
             // 增强版清除逻辑
             await this.performEnhancedClear(page);
 
             // 输入币种
             await page.keyboard.type(coin);
-            await page.waitForTimeout(1000);
+            await page.waitForTimeout(this.config.waitTimes.method);
 
             // 查找并点击选项
             const optionClicked = await page.evaluate((targetCoin) => {
@@ -403,7 +426,7 @@ export class ScraperService {
             }, coin);
 
             if (optionClicked) {
-              await page.waitForTimeout(2000);
+              await page.waitForTimeout(this.config.waitTimes.verification);
               return true;
             }
           }
@@ -464,11 +487,11 @@ export class ScraperService {
       }, coin);
 
       if (success) {
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(this.config.waitTimes.retry);
 
         // 使用键盘输入币种
         await page.keyboard.type(coin);
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(this.config.waitTimes.method);
 
         // 查找并选择选项
         const optionSelected = await page.evaluate((targetCoin) => {
@@ -507,7 +530,7 @@ export class ScraperService {
         }, coin);
 
         if (optionSelected) {
-          await page.waitForTimeout(2500);
+          await page.waitForTimeout(this.config.waitTimes.optionSelect);
           return true;
         }
       }
@@ -538,7 +561,7 @@ export class ScraperService {
       await page.keyboard.type(coin);
 
       // 等待选项加载
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(this.config.waitTimes.method);
 
       // 查找并点击目标币种选项
       const optionClicked = await page.evaluate((targetCoin) => {
@@ -564,7 +587,7 @@ export class ScraperService {
       }
 
       // 等待页面更新
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(this.config.waitTimes.verification);
 
       return true;
 
@@ -587,7 +610,7 @@ export class ScraperService {
     await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
     await page.keyboard.press('Delete');
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(this.config.waitTimes.clear);
   }
 
   /**
@@ -658,10 +681,10 @@ export class ScraperService {
 
     try {
       // 等待网络空闲
-      await page.waitForLoadState?.('networkidle') || await page.waitForTimeout(3000);
+      await page.waitForLoadState?.('networkidle') || await page.waitForTimeout(this.config.waitTimes.data);
 
       // 额外等待确保数据更新
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(this.config.waitTimes.data);
 
       console.log(`✅ ${expectedCoin} 数据刷新等待完成`);
     } catch (error) {
@@ -791,7 +814,7 @@ export class ScraperService {
         return false;
       }, timeframe);
 
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(this.config.waitTimes.verification);
 
       if (success) {
         console.log(`✅ 成功切换到时间框架: ${timeframe}`);

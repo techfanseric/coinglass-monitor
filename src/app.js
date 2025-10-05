@@ -10,27 +10,33 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
+import os from 'os';
 
 // 获取当前文件目录
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 加载环境变量（根据平台选择配置文件）
-const platform = process.platform === 'win32' ? 'windows' : 'mac';
-const envPath = path.join(__dirname, '..', `.${platform}.env`);
+// 加载环境变量 - 简化配置加载
+const projectRoot = path.join(__dirname, '..');
+const envPath = path.join(projectRoot, '.env');
 
-// 尝试加载平台特定环境变量，如果不存在则加载默认配置
+// 设置日志文件路径
+const logFilePath = process.env.LOGS_DIR ?
+  path.join(process.env.LOGS_DIR, 'server.log') :
+  path.join(projectRoot, 'logs', 'server.log');
+
 try {
   dotenv.config({ path: envPath });
-  console.log(`✅ 已加载 ${platform} 平台环境配置`);
+  console.log('✅ 已加载环境配置 (.env)');
 } catch (error) {
-  console.log(`⚠️  ${platform} 环境配置文件不存在，使用默认配置`);
-  dotenv.config();
+  console.error('❌ 加载环境配置失败:', error.message);
+  console.log('💡 请复制 .env.example 为 .env 并配置相关参数');
 }
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const NODE_ENV = process.env.NODE_ENV || 'development';
+const platform = os.platform();
 
 // 确保必要目录存在
 async function ensureDirectories() {
@@ -49,14 +55,26 @@ async function ensureDirectories() {
   }
 }
 
+// 从环境变量加载服务器配置
+const serverConfig = {
+  corsOrigins: process.env.CORS_ORIGINS ?
+    process.env.CORS_ORIGINS.split(',').map(origin => origin.trim()) :
+    ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3001'],
+  requestBodySizeLimit: process.env.REQUEST_BODY_SIZE_LIMIT || '10mb',
+  silentPaths: process.env.SILENT_PATHS ?
+    process.env.SILENT_PATHS.split(',').map(path => path.trim()) :
+    ['/api/status/logs', '/api/status', '/api/config', '/'],
+  logRequestEnabled: process.env.LOG_REQUEST_ENABLED !== 'false'
+};
+
 // 中间件配置
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3001'],
+  origin: serverConfig.corsOrigins,
   credentials: true
 }));
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: serverConfig.requestBodySizeLimit }));
+app.use(express.urlencoded({ extended: true, limit: serverConfig.requestBodySizeLimit }));
 
 // 重写console.log以捕获所有日志输出
 const originalConsoleLog = console.log;
@@ -73,7 +91,7 @@ console.log = function(...args) {
     const logMessage = args.join(' ');
     const logLine = `[${timestamp}] ${logMessage}\n`;
 
-    fsSync.appendFileSync('./server.log', logLine);
+    fsSync.appendFileSync(logFilePath, logLine);
   } catch (error) {
     originalConsoleError('写入日志失败:', error.message);
   }
@@ -89,7 +107,7 @@ console.error = function(...args) {
     const logMessage = args.join(' ');
     const logLine = `[${timestamp}] ERROR: ${logMessage}\n`;
 
-    fsSync.appendFileSync('./server.log', logLine);
+    fsSync.appendFileSync(logFilePath, logLine);
   } catch (error) {
     originalConsoleError('写入日志失败:', error.message);
   }
@@ -105,7 +123,7 @@ console.warn = function(...args) {
     const logMessage = args.join(' ');
     const logLine = `[${timestamp}] WARN: ${logMessage}\n`;
 
-    fsSync.appendFileSync('./server.log', logLine);
+    fsSync.appendFileSync(logFilePath, logLine);
   } catch (error) {
     originalConsoleError('写入日志失败:', error.message);
   }
@@ -113,15 +131,13 @@ console.warn = function(...args) {
 
 // 请求日志中间件
 app.use((req, res, next) => {
-  // 不记录这些频繁的请求，避免日志污染
-  const silentPaths = [
-    '/api/status/logs',
-    '/api/status',
-    '/api/config',
-    '/'
-  ];
+  // 检查是否启用请求日志
+  if (!serverConfig.logRequestEnabled) {
+    return next();
+  }
 
-  if (silentPaths.some(path => req.url === path || req.url.startsWith(path + '?'))) {
+  // 不记录这些频繁的请求，避免日志污染
+  if (serverConfig.silentPaths.some(path => req.url === path || req.url.startsWith(path + '?'))) {
     return next();
   }
 
@@ -133,7 +149,7 @@ app.use((req, res, next) => {
 
   // 写入到日志文件
   try {
-    const logPath = './server.log';
+    const logPath = logFilePath;
     fsSync.appendFileSync(logPath, logMessage);
   } catch (error) {
     console.error('写入日志失败:', error.message);
@@ -175,7 +191,28 @@ app.get('/health', (req, res) => {
 // 前端界面路由 - 必须在API路由之后
 app.get('/', (req, res) => {
   const indexPath = path.join(__dirname, '..', 'index.html');
-  res.sendFile(indexPath);
+
+  // 读取HTML文件并注入前端配置
+  try {
+    let htmlContent = fsSync.readFileSync(indexPath, 'utf8');
+
+    // 注入前端配置
+    const configScript = `
+    <script>
+      // 注入前端配置
+      window.FRONTEND_UPDATE_INTERVAL = ${process.env.FRONTEND_UPDATE_INTERVAL || 30000};
+      window.FRONTEND_API_REQUEST_TIMEOUT = ${process.env.FRONTEND_API_REQUEST_TIMEOUT || 10000};
+      window.FRONTEND_LOG_REFRESH_INTERVAL = ${process.env.FRONTEND_LOG_REFRESH_INTERVAL || 1000};
+    </script>`;
+
+    // 在</head>前插入配置脚本
+    htmlContent = htmlContent.replace('</head>', configScript + '</head>');
+
+    res.send(htmlContent);
+  } catch (error) {
+    console.error('读取前端文件失败:', error);
+    res.sendFile(indexPath);
+  }
 });
 
 // 404 处理
@@ -277,8 +314,7 @@ async function startServer() {
       console.log('=====================================');
       console.log('⏰ 启动时间:', new Date().toLocaleString());
       console.log('🗑️ 日志清理: 每天凌晨2点自动清理7天前的日志');
-      console.log('\n💡 提示: 使用 Ctrl+C 停止服务');
-    });
+      });
 
   } catch (error) {
     console.error('❌ 服务器启动失败:', error);

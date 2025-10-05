@@ -4,116 +4,166 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-这是一个基于 Cloudflare Workers 和 EmailJS 通知的 CoinGlass 利率监控系统。它监控加密货币借贷利率并在超过阈值时发送警报。
+这是一个基于本地 Express 服务器的 CoinGlass 利率监控系统。它监控加密货币借贷利率并在超过阈值时发送警报。
 
-This is a CoinGlass interest rate monitoring system based on Cloudflare Workers and EmailJS notifications. It monitors cryptocurrency lending rates and sends alerts when thresholds are exceeded.
+This is a CoinGlass interest rate monitoring system based on a local Express server. It monitors cryptocurrency lending rates and sends alerts when thresholds are exceeded.
 
 ## Architecture
 
 ### Core Structure
-- **src/index.js** - 主要 Worker 入口点，包含路由和定时任务处理，内嵌Web界面
-- **src/modules/** - 核心业务逻辑模块：
-  - `monitor.js` - 主要监控逻辑和阈值检查
-  - `scraper.js` - CoinGlass 数据抓取和解析
+- **src/app.js** - Express 服务器主入口，包含中间件配置、路由和启动逻辑
+- **src/services/** - 核心业务逻辑服务：
+  - `monitor-service.js` - 主要监控逻辑和阈值检查（从Cloudflare Workers迁移）
+  - `scraper.js` - CoinGlass 数据抓取和解析（使用Puppeteer）
   - `email.js` - EmailJS 集成用于通知
-- **src/utils/** - 工具模块：
-  - `config.js` - KV 存储操作和配置管理
-  - `parser.js` - HTML 解析工具
-- **tests/** - 测试文件：
-  - `unit/` - 单元测试
-  - `integration/` - 集成测试
-  - `fixtures/` - 测试数据和mock对象
-  - `setup.js` - 测试环境配置
+  - `storage.js` - 本地文件系统存储服务（替代Cloudflare KV）
+  - `logger.js` - 日志管理服务
+- **src/routes/** - API 路由：
+  - `config.js` - 配置管理API
+  - `status.js` - 状态查询API
+  - `scrape.js` - 数据抓取API
+- **index.html** - 前端界面（通过Express静态文件服务）
 
 ### Key Components
-- **多币种邮件模板**：使用EmailJS官方规范的多币种通知模板，支持条件渲染和数组循环
-- **Hysteresis 通知系统**：通过智能冷却期防止垃圾邮件
-- **两栏界面**：左侧栏用于监控管理，右侧栏用于通知设置（内嵌在 src/index.js 中）
-- **动态 KV 存储**：使用两个 KV 命名空间（CONFIG_KV 用于用户设置， STATE_KV 用于监控状态）
-- **多交易所支持**：可配置支持 Binance、OKX、Bybit 交易所
-- **完整测试覆盖**：包含单元测试、集成测试和真实API测试
-- **EmailJS 集成**：支持真实邮件发送，符合EmailJS官方规范
-
-- **Multi-Coin Email Template**: EmailJS compliant multi-coin notification template with conditional rendering and array loops
-- **Hysteresis Notification System**: Prevents spam through intelligent cooling periods
-- **Two-column Interface**: Left column for monitoring management, right column for notification settings (embedded in src/index.js)
-- **Dynamic KV Storage**: Uses two KV namespaces (CONFIG_KV for user settings, STATE_KV for monitoring state)
-- **Multi-exchange Support**: Configurable support for Binance, OKX, Bybit exchanges
-- **Complete Test Coverage**: Includes unit tests, integration tests, and real API testing
-- **EmailJS Integration**: Real email sending with EmailJS official specification compliance
+- **本地文件存储**：使用本地文件系统存储配置、状态和邮件历史数据
+- **Hysteresis 通知系统**：通过智能冷却期防止垃圾邮件，保持原有状态机逻辑
+- **跨平台支持**：支持Windows、macOS和Linux部署，统一配置系统
+- **Puppeteer数据抓取**：使用Stealth插件避免反爬虫检测，支持调试截图
+- **EmailJS 集成**：EmailJS邮件通知系统，支持多币种通知模板
+- **定时监控服务**：集成在Express服务器中的定时任务系统，支持灵活触发时间
+- **日志管理**：完整的结构化日志记录和自动清理系统，支持实时查看
+- **ES模块架构**：使用"type": "module"支持现代ES6模块语法
+- **Web管理界面**：提供直观的配置管理和状态监控界面
+- **智能配置系统**：自动检测Chrome路径和创建必要目录
 
 ## Development Commands
 
 ### Local Development
 ```bash
-npm run dev          # Start local development server (http://localhost:58477)
-npm run tail         # View real-time Worker logs
-wrangler tail        # Alternative method to view logs
+npm start               # Start production server
+npm run dev             # Start development server with file watching
+npm run dev:debug       # Start server with Node.js debugger
+npm run monitor         # Run monitoring service standalone
 ```
 
-### Testing
+### Platform-specific Deployment
 ```bash
-npm test             # Run all unit tests
-npm run test:ui      # Run tests with UI interface
-npm run test:coverage # Generate test coverage report
-npm run test:watch   # Run tests in watch mode
-node send-test-email.js  # Send test email to configured address
+npm run deploy:windows  # Copy Windows env config and start server
+npm run deploy:mac      # Copy macOS env config and start server
+npm run setup           # Run general setup script
+npm run setup:windows   # Run Windows-specific setup script (Chrome detection, directory creation)
+npm run setup:mac       # Run macOS-specific setup script
+npm run cleanup         # Run cleanup script (Note: cleanup.js script referenced but may not exist)
 ```
 
-### Test Pages Access
+### Testing and Debugging
 ```bash
-http://localhost:58477         # Main monitoring interface with email testing functionality
+npm run monitor         # Run monitoring task manually to test scraping
+curl http://localhost:{端口}/health    # Check server health
+curl http://localhost:{端口}/api/status  # Get monitoring status
 ```
 
-### Deployment
+### Log Management
 ```bash
-npm run deploy           # Deploy to production environment
-npm run deploy:dev       # Deploy to development environment
-npm run deploy:preview    # Deploy to preview environment
-./deploy-with-env.sh     # Deploy using environment variables
+# Logs are automatically written to ./server.log
+tail -f ./server.log    # View real-time logs
+# Log files are automatically cleaned up (7-day retention)
 ```
 
-### KV Management
+### Access Points
 ```bash
-wrangler kv:namespace create "CONFIG_KV"      # Create configuration namespace
-wrangler kv:namespace create "STATE_KV"       # Create state namespace
-wrangler kv:key list --namespace-id=<id>      # List KV keys
-wrangler kv:key get "user_settings" --namespace-id=<CONFIG_KV_ID>
-wrangler kv:key put "user_settings" '{"test": "data"}' --namespace-id=<CONFIG_KV_ID>
+http://localhost:{端口}               # Main monitoring interface
+http://localhost:{端口}/health       # Health check endpoint
+http://localhost:{端口}/api/config   # Configuration API
+http://localhost:{端口}/api/status   # Status API
+http://localhost:{端口}/api/scrape   # Scraping API
 ```
 
 ## Important Implementation Details
 
-### Environment Variables
-The project uses environment variables for sensitive configuration:
-- Copy `.env.example` to `.env` and fill in your EmailJS credentials
-- Use `wrangler secret put` to set secrets for production (EMAILJS_PRIVATE_KEY, EMAILJS_PUBLIC_KEY, etc.)
-- Never commit actual API keys to the repository
+### Environment Variables (简化配置系统)
+项目使用极简的环境配置系统：
+- `.env.example` - 标准配置模板（复制为.env使用）
+- `.env` - 唯一的配置文件，包含所有必要配置
 
-### Data Flow
-1. **Scheduled Tasks**: Runs hourly via cron trigger, but monitoring logic checks trigger time conditions
-2. **Trigger Check**: Checks if current time meets user-configured trigger conditions (hourly or daily trigger time)
-3. **Configuration Retrieval**: Gets user settings from CONFIG_KV
-4. **Data Scraping**: Scrapes CoinGlass data based on configured filters (exchange, coin, time range)
-5. **Threshold Check**: Compares current rates with user-defined thresholds
-6. **State Management**: Tracks monitoring state in STATE_KV to implement hysteresis
-7. **Notification**: Sends emails via EmailJS when thresholds are triggered
+**配置包含**：
+- 服务基础配置（端口、数据目录、CORS等）
+- EmailJS 邮件配置（Service ID、Template ID、密钥等）
+- Puppeteer 抓取配置（超时、窗口大小、等待时间等）
+- CoinGlass 网站配置（URL、等待时间、截图目录等）
+- 数据格式化配置（小数位数、货币格式等）
+- 服务器配置（请求限制、日志设置等）
+- 日志管理配置（保留天数、自动清理等）
+- 前端配置（更新间隔、API超时等）
+- 监控服务配置（重试次数、冷却时间等）
 
-### Notification Logic
-- **First Trigger**: Rate > threshold → Immediate notification
-- **Continuous Alert**: Repeat every 3-6 hours
-- **Recovery Notification**: Rate ≤ threshold → Immediate recovery notification
-- **Time Control**: Optional notification time window
+**配置设置命令**：
+```bash
+npm run setup           # 自动检测 Chrome 路径并创建必要目录（推荐）
+```
 
-### Web Interface Features
-- **Add Monitoring**: Single-line form to create new monitoring rules, supports setting data granularity (hourly/24-hourly)
-- **Monitoring List**: Displays active monitoring items, supports toggle and delete functions
-- **Notification Settings**: Email configuration, repeat notification interval, trigger time settings and time control
-- **Real-time Status**: Shows current status and latest rate data
+**首次使用**：
+1. 复制 `.env.example` 为 `.env`
+2. 运行 `npm run setup` 自动配置 Chrome 路径和创建目录
+3. 编辑 `.env` 配置 EMAILJS_PRIVATE_KEY 和其他必要参数
 
-## Configuration Structure
+### 本地存储架构
+本地文件系统存储结构：
+- **数据目录结构**：
+  - `data/config.json` - 用户配置文件
+  - `data/state.json` - 监控状态文件（支持多币种状态）
+  - `data/email-history/` - 邮件发送历史（JSON格式，包含时间戳）
+  - `data/scrape-history/` - 抓取数据历史（用于趋势分析）
+  - `data/debug-screenshots/` - 调试截图（可选功能）
+  - `data/backups/` - 自动备份目录
+  - `data/logs/` - 系统日志目录
+- **自动备份**：定期备份配置和状态数据到backup目录
+- **数据清理**：自动清理超过7天的历史数据和日志
+- **文件格式**：使用JSON格式存储，便于调试和迁移
+- **并发安全**：使用文件锁机制防止并发写入冲突
 
-User configuration stored in KV:
+### 监控系统数据流
+1. **定时检查**：服务器启动时集成监控服务，按用户配置的时间条件触发
+2. **触发条件检查**：检查当前时间是否满足hourly_minute或daily_hour设置
+3. **数据抓取**：使用Puppeteer抓取CoinGlass数据，支持反爬虫策略
+4. **阈值检查**：对比当前利率与用户设定阈值
+5. **状态管理**：使用本地文件系统跟踪币种状态，实现Hysteresis逻辑
+6. **邮件通知**：通过EmailJS发送警报或恢复通知
+7. **延迟通知**：支持非通知时间段内的延迟发送机制
+
+### 监控服务实现说明
+- **主要监控逻辑**：位于 `src/services/monitor-service.js`，包含完整的监控功能
+- **独立监控服务**：`src/services/monitor.js` 提供独立的监控功能，用于测试
+- **独立运行**：可通过 `npm run monitor` 独立执行监控任务进行测试
+
+### Hysteresis通知逻辑
+- **首次触发**：利率 > 阈值 → 立即通知（如果在通知时间段内）
+- **持续警报**：按repeat_interval设置重复通知（默认180分钟）
+- **恢复通知**：利率 ≤ 阈值 → 立即恢复通知
+- **时间控制**：支持notification_hours时间窗口设置
+- **延迟通知**：非时间段内自动安排到下一个允许时间发送
+
+### Puppeteer数据抓取
+- **反检测配置**：使用puppeteer-extra-plugin-stealth避免反爬虫检测
+- **浏览器配置**：支持无头模式和完整浏览器模式，可自定义窗口大小
+- **智能等待策略**：针对CoinGlass网站的不同元素设置专门等待时间
+- **数据解析**：提取币种利率、历史趋势、交易所数据等关键信息
+- **错误处理**：完善的网络错误和数据解析错误处理，支持重试机制
+- **调试支持**：可选的截图功能，便于调试数据抓取问题
+- **Chrome检测**：自动检测系统Chrome路径，未找到时使用内置Chromium
+
+### 日志系统
+- **自动日志捕获**：重写console方法，捕获所有系统日志
+- **双重日志输出**：同时输出到控制台和文件（./server.log）
+- **日志清理**：自动清理7天前的日志文件，可配置保留天数
+- **结构化日志**：包含时间戳、级别、模块信息
+- **日志API**：通过Web界面查看和管理日志
+- **性能监控**：记录API请求时间和系统性能指标
+- **错误追踪**：详细的错误堆栈和上下文信息
+
+## 配置结构
+
+用户配置存储在 `data/config.json`：
 ```json
 {
   "email": "user@example.com",
@@ -142,57 +192,101 @@ User configuration stored in KV:
     "start": "09:00",
     "end": "24:00"
   },
-  "repeat_interval": 3
+  "repeat_interval": 180
 }
 ```
 
-### Trigger Time Settings
-- **Hourly Trigger Time**: 0-59, indicates which minute of each hour to trigger monitoring
-- **24-hourly Trigger Time**: Format H:MM, indicates specific time each day to trigger monitoring
-- System checks both trigger conditions simultaneously, triggers monitoring if either condition is met
-- Cloudflare Workers scheduled task set to run hourly, trigger logic controlled in code
+### 触发时间设置
+- **每小时触发**：0-59分钟，表示每小时的第几分钟执行监控
+- **每24小时触发**：H:MM格式，表示每天特定时间执行监控
+- **同时检查**：系统同时检查两个触发条件，任一满足即执行
+- **灵活配置**：支持仅每小时、仅每24小时或同时启用
 
-## API Endpoints
-- `GET /api/config` - Get user configuration
-- `POST /api/config` - Save user configuration
-- `GET /api/status` - Get current monitoring status
-- `GET /api/history` - Get email history
+## API接口
+- `GET /api/config` - 获取用户配置
+- `POST /api/config` - 保存用户配置
+- `GET /api/status` - 获取当前监控状态
+- `GET /api/scrape` - 手动触发数据抓取
+- `GET /health` - 服务器健康检查
 
-## Deployment Notes
+## EmailJS配置
+系统支持通过 EmailJS 发送邮件通知，需要配置以下参数：
+- **EMAILJS_SERVICE_ID**: EmailJS 服务ID
+- **EMAILJS_TEMPLATE_ID**: 邮件模板ID
+- **EMAILJS_PUBLIC_KEY**: EmailJS 公钥
+- **EMAILJS_PRIVATE_KEY**: EmailJS 私钥
+- **EMAILJS_API_URL**: EmailJS API地址
 
-### KV Namespace Setup
-Project needs to create and configure two KV namespaces in `wrangler.toml`:
-- **CONFIG_KV**: Stores user configuration and settings
-- **STATE_KV**: Stores monitoring status and notification history
+**模板功能**：
+- 多币种支持与数组循环
+- 状态条件渲染
+- 历史数据表格
+- 实时状态监控
 
-### EmailJS Integration
-- Configure EmailJS service and template
-- Set up public/private key authentication
-- Template variables include current rate, threshold, historical data and all coin status
+## 重要说明
 
-### Monitoring Schedule
-- Default: Runs once per hour at 0 minutes (0 * * * *)
-- Actual trigger time controlled by user's `trigger_settings`
-- Supports both hourly and 24-hourly trigger modes
-- Can modify base execution frequency in `[triggers]` section of `wrangler.toml`
+### 监控脚本澄清
+- `npm run monitor` 运行的是 `src/services/monitor.js`（独立测试版本）
+- 完整的监控逻辑在 `src/services/monitor-service.js` 中（集成到主服务器）
+- 要运行完整监控，需要启动主服务器 (`npm start` 或 `npm run dev`)
 
-### EmailJS Configuration
-- **Service ID**: `service_njwa17p`
-- **Template ID**: `template_2a6ntkh` (Multi-coin notification template)
-- **Public Key**: `R2I8depNfmvcV7eTz` (used for both testing and production)
-- **Template Features**:
-  - Multi-coin support with array loops
-  - Conditional rendering for status display
-  - Historical data tables
-  - Real-time status monitoring
-- **EmailJS Compliance**: Follows official EmailJS specification with proper Handlebars syntax
-- **Test interface**: `http://localhost:58477` provides EmailJS testing functionality
+### 脚本说明
+- `scripts/setup-simple.js` ✅ 推荐的配置脚本（自动检测 Chrome 路径）
+- `scripts/setup-windows.js` Windows 特定配置脚本
+- `scripts/setup-mac.js` macOS 特定配置脚本
+- `scripts/start-windows.bat` Windows 启动脚本
+- `scripts/start-mac.sh` macOS 启动脚本
+- `scripts/cleanup.js` 清理脚本（在package.json中引用）
 
-### Testing Architecture
-- **Unit Testing**: Uses Vitest framework, coverage target 85%
-- **Test Directory Structure**:
-  - `tests/integration/` - Integration tests for email functionality
-  - `tests/fixtures/` - Test data and mock objects
-  - `tests/setup.js` - Test environment configuration
-- **Mock Strategy**: KV storage simulation, EmailJS API mocking
-- **Test Status**: All tests passing, email functionality 100% coverage
+### 配置文件使用说明
+**新用户配置**：
+1. 复制 `.env.example` 为 `.env`
+2. 运行 `npm run setup` 自动配置 Chrome 路径和创建必要目录
+3. 编辑 `.env` 文件，主要配置 `EMAILJS_PRIVATE_KEY` 和其他必要参数
+
+**现有用户**：
+- 如果已有 `.env` 文件，直接运行 `npm run setup` 更新 Chrome 路径
+- 所有配置现在集中在一个文件中，无需管理多个配置文件
+
+**目录结构**：
+- `data/` 目录会在首次运行时自动创建
+- 包含 `config.json`、`state.json`、`email-history/`、`scrape-history/` 等子目录
+- 调试截图目录 `debug-screenshots/` 可选创建
+
+## Web 界面功能
+
+### 主要功能
+- **配置管理**：通过Web界面编辑和保存配置
+- **状态监控**：实时显示监控状态和币种信息
+- **历史数据**：查看抓取历史和邮件发送记录
+- **日志查看**：通过界面查看系统日志
+- **手动操作**：手动触发数据抓取和监控任务
+
+### API 端点
+- `GET /` - 主页面（前端界面）
+- `GET /api/config` - 获取配置
+- `POST /api/config` - 保存配置
+- `GET /api/status` - 获取监控状态
+- `GET /api/scrape` - 手动触发数据抓取
+- `GET /health` - 健康检查
+
+## 技术栈详情
+
+### 核心依赖
+- **express**: Web 服务器框架
+- **puppeteer**: 网页自动化和数据抓取
+- **puppeteer-extra**: Puppeteer 增强插件
+- **puppeteer-extra-plugin-stealth**: 反检测插件
+- **dotenv**: 环境变量管理
+- **cors**: 跨域资源共享
+- **node-cron**: 定时任务调度
+- **winston**: 日志管理（可选）
+
+### 开发依赖
+- **nodemon**: 开发时自动重启
+
+### 架构特点
+- **ES6 模块**: 使用 import/export 语法
+- **异步编程**: 全面使用 async/await
+- **错误处理**: 完善的 try-catch 和错误传播
+- **模块化设计**: 清晰的服务层和路由层分离

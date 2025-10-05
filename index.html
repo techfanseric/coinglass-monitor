@@ -633,6 +633,13 @@
         const API_BASE = window.location.origin;
         let currentConfig = null;
 
+        // 从环境变量加载前端配置（通过全局变量注入）
+        const frontendConfig = {
+          updateInterval: parseInt(window.FRONTEND_UPDATE_INTERVAL) || 30000,
+          apiRequestTimeout: parseInt(window.FRONTEND_API_REQUEST_TIMEOUT) || 10000,
+          logRefreshInterval: parseInt(window.FRONTEND_LOG_REFRESH_INTERVAL) || 1000
+        };
+
         // 页面加载时初始化
         document.addEventListener('DOMContentLoaded', function() {
             // 先加载配置，然后加载状态
@@ -643,8 +650,8 @@
                 loadStatus();
             });
 
-            // 每30秒更新一次状态
-            setInterval(loadStatus, 30000);
+            // 按配置间隔更新状态
+            setInterval(loadStatus, frontendConfig.updateInterval);
         });
 
         // 添加监控
@@ -1444,7 +1451,7 @@
         triggerMonitoring = async function() {
             // 增加日志更新频率
             stopLogPolling();
-            const fastPollInterval = setInterval(updateLogs, 1000); // 每秒更新
+            const fastPollInterval = setInterval(updateLogs, frontendConfig.logRefreshInterval);
 
             try {
                 await originalTriggerMonitoring();

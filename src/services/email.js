@@ -6,6 +6,15 @@
 import { storageService } from './storage.js';
 import { loggerService } from './logger.js';
 
+// 从环境变量加载配置
+const emailConfig = {
+  currencyDecimalPlaces: parseInt(process.env.CURRENCY_DECIMAL_PLACES) || 2,
+  rateDecimalPlaces: parseInt(process.env.RATE_DECIMAL_PLACES) || 4,
+  percentageDecimalPlaces: parseInt(process.env.PERCENTAGE_DECIMAL_PLACES) || 1,
+  emailjsApiUrl: process.env.EMAILJS_API_URL || 'https://api.emailjs.com/api/v1.0/email/send',
+  emailjsTimeout: parseInt(process.env.EMAILJS_TIMEOUT) || 10000
+};
+
 /**
  * 计算下次检查时间
  */
@@ -152,7 +161,7 @@ function prepareAlertEmail(alertData, env, config = null) {
     .filter(([symbol, data]) => data.annual_rate > alertData.threshold)
     .map(([symbol, data]) => ({
       symbol,
-      rate: data.annual_rate.toFixed(2)
+      rate: data.annual_rate.toFixed(emailConfig.currencyDecimalPlaces)
     }))
     .sort((a, b) => b.rate - a.rate); // 按利率从高到低排序
 
@@ -161,7 +170,7 @@ function prepareAlertEmail(alertData, env, config = null) {
   const title = `${new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })} | ${coinSummaries}${alertTriggeredCoins.length > 3 ? '...' : ''}`;
 
   // 计算主要触发币种的超出百分比
-  const excess = ((alertData.current_rate - alertData.threshold) / alertData.threshold * 100).toFixed(1);
+  const excess = ((alertData.current_rate - alertData.threshold) / alertData.threshold * 100).toFixed(emailConfig.percentageDecimalPlaces);
 
   // 构建触发币种数组（包含所有超过阈值的币种）
   const triggeredCoins = Object.entries(alertData.all_coins)
@@ -177,26 +186,26 @@ function prepareAlertEmail(alertData, env, config = null) {
       const threshold = coinConfig ? coinConfig.threshold : alertData.threshold;
 
       // 计算每个币种的超出百分比（使用自己的阈值）
-      const coinExcess = ((data.annual_rate - threshold) / threshold * 100).toFixed(1);
+      const coinExcess = ((data.annual_rate - threshold) / threshold * 100).toFixed(emailConfig.percentageDecimalPlaces);
       // 获取该币种的历史数据
       const coinHistory = alertData.all_coins[symbol]?.history || [];
 
       return {
         symbol: symbol,
-        current_rate: data.annual_rate.toFixed(2),
-        threshold: threshold.toFixed(2), // 使用该币种自己的阈值
+        current_rate: data.annual_rate.toFixed(emailConfig.currencyDecimalPlaces),
+        threshold: threshold.toFixed(emailConfig.currencyDecimalPlaces), // 使用该币种自己的阈值
         excess: coinExcess,
-        daily_rate: (data.annual_rate / 365).toFixed(2),
-        hourly_rate: (data.annual_rate / 365 / 24).toFixed(4),
+        daily_rate: (data.annual_rate / 365).toFixed(emailConfig.currencyDecimalPlaces),
+        hourly_rate: (data.annual_rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces),
         history: coinHistory.slice(0, 5).map(h => {
           // 提取时间中的小时和分钟部分，去掉日期
           const timeMatch = h.time.match(/(\d{1,2}:\d{2})/);
           const timeStr = timeMatch ? timeMatch[1] : h.time;
           return {
             time: timeStr,
-            rate: h.annual_rate ? h.annual_rate.toFixed(2) : 'N/A',
-            daily_rate: h.annual_rate ? (h.annual_rate / 365).toFixed(2) : 'N/A',
-            hourly_rate: h.annual_rate ? (h.annual_rate / 365 / 24).toFixed(4) : 'N/A'
+            rate: h.annual_rate ? h.annual_rate.toFixed(emailConfig.currencyDecimalPlaces) : 'N/A',
+            daily_rate: h.annual_rate ? (h.annual_rate / 365).toFixed(emailConfig.currencyDecimalPlaces) : 'N/A',
+            hourly_rate: h.annual_rate ? (h.annual_rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces) : 'N/A'
           };
         })
       };
@@ -211,8 +220,8 @@ function prepareAlertEmail(alertData, env, config = null) {
 
     return {
       symbol: symbol,
-      annual_rate: data.annual_rate.toFixed(2),
-      threshold: threshold.toFixed(2), // 使用该币种自己的阈值
+      annual_rate: data.annual_rate.toFixed(emailConfig.currencyDecimalPlaces),
+      threshold: threshold.toFixed(emailConfig.currencyDecimalPlaces), // 使用该币种自己的阈值
       is_above_threshold: data.annual_rate > threshold
     };
   });
@@ -246,19 +255,19 @@ function prepareRecoveryEmail(recoveryData, env) {
   // 构建触发币种数组（回落通知时币种在正常范围内）
   const triggeredCoins = [{
     symbol: recoveryData.coin,
-    current_rate: recoveryData.current_rate.toFixed(2),
-    threshold: recoveryData.threshold.toFixed(2),
+    current_rate: recoveryData.current_rate.toFixed(emailConfig.currencyDecimalPlaces),
+    threshold: recoveryData.threshold.toFixed(emailConfig.currencyDecimalPlaces),
     excess: '0',
-    daily_rate: (recoveryData.current_rate / 365).toFixed(2),
-    hourly_rate: (recoveryData.current_rate / 365 / 24).toFixed(4),
+    daily_rate: (recoveryData.current_rate / 365).toFixed(emailConfig.currencyDecimalPlaces),
+    hourly_rate: (recoveryData.current_rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces),
     history: [] // 回落通知不需要历史数据
   }];
 
   // 构建所有币种状态数组
   const allCoinsStatus = [{
     symbol: recoveryData.coin,
-    annual_rate: recoveryData.current_rate.toFixed(2),
-    threshold: recoveryData.threshold.toFixed(2),
+    annual_rate: recoveryData.current_rate.toFixed(emailConfig.currencyDecimalPlaces),
+    threshold: recoveryData.threshold.toFixed(emailConfig.currencyDecimalPlaces),
     is_above_threshold: false
   }];
 
@@ -337,7 +346,7 @@ async function sendEmailJS(env, emailData) {
 
 
     // 尝试直接使用JSON格式，模拟浏览器POST请求
-    const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+    const response = await fetch(emailConfig.emailjsApiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
