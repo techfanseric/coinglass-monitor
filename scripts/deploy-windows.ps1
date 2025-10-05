@@ -6,7 +6,9 @@ param(
     [switch]$SkipNodeInstall,
     [switch]$SkipChromeCheck,
     [switch]$DevMode,
-    [string]$Port = "3000"
+    [string]$Port = "3000",
+    [string]$RepoUrl = "https://github.com/techfanseric/coinglass-monitor.git",
+    [string]$ProjectName = "coinglass-monitor"
 )
 
 # 设置错误处理
@@ -196,13 +198,75 @@ function Test-ChromeInstallation {
     }
 }
 
+# 克隆项目仓库
+function Clone-Project {
+    Write-ColorOutput "正在检查项目环境..." "Cyan"
+
+    # 检查是否在项目目录中
+    if (Test-Path "package.json") {
+        Write-ColorOutput "✓ 已在项目目录中" "Green"
+        return $true
+    }
+
+    Write-ColorOutput "未检测到项目文件，正在克隆仓库..." "Yellow"
+
+    # 获取当前目录
+    $currentDir = Get-Location
+    $projectPath = Join-Path $currentDir $ProjectName
+
+    # 如果项目目录已存在，自动处理（使用时间戳避免冲突）
+    if (Test-Path $projectPath) {
+        Write-ColorOutput "⚠️  项目目录 '$ProjectName' 已存在，正在创建新实例..." "Yellow"
+        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $newProjectName = "$ProjectName-$timestamp"
+        $projectPath = Join-Path $currentDir $newProjectName
+        Write-ColorOutput "将创建新目录: $newProjectName" "Cyan"
+    }
+
+    # 克隆仓库
+    try {
+        Write-ColorOutput "正在从 GitHub 克隆仓库..." "Cyan"
+        $actualProjectName = if ($newProjectName) { $newProjectName } else { $ProjectName }
+        git clone $RepoUrl $actualProjectName
+
+        if (Test-Path $projectPath) {
+            # 进入项目目录
+            Set-Location $projectPath
+            Write-ColorOutput "✓ 项目克隆成功" "Green"
+            Write-ColorOutput "当前目录: $(Get-Location)" "Cyan"
+            return $true
+        } else {
+            Write-ColorOutput "✗ 项目克隆失败" "Red"
+            return $false
+        }
+    }
+    catch {
+        Write-ColorOutput "✗ Git 克隆失败: $_" "Red"
+        Write-ColorOutput "可能的原因:" "Yellow"
+        Write-ColorOutput "  • 网络连接问题" "Yellow"
+        Write-ColorOutput "  • Git 未正确安装" "Yellow"
+        Write-ColorOutput "  • GitHub 访问受限" "Yellow"
+
+        # 提供手动下载方案
+        Write-ColorOutput "" "Cyan"
+        Write-ColorOutput "替代方案: 手动下载项目" "Cyan"
+        Write-ColorOutput "1. 访问: https://github.com/techfanseric/coinglass-monitor" "Cyan"
+        Write-ColorOutput "2. 点击 'Code' -> 'Download ZIP'" "Cyan"
+        Write-ColorOutput "3. 解压到当前目录并重命名为 '$ProjectName'" "Cyan"
+        Write-ColorOutput "4. 重新运行此脚本" "Cyan"
+
+        return $false
+    }
+}
+
 # 设置项目环境
 function Initialize-Project {
     Write-ColorOutput "正在初始化项目环境..." "Cyan"
 
-    # 检查是否在项目目录中
+    # 确保在项目目录中
     if (!(Test-Path "package.json")) {
-        Write-ColorOutput "错误: 未找到 package.json，请确保在项目根目录中运行此脚本" "Red"
+        Write-ColorOutput "错误: 未找到 package.json" "Red"
+        Write-ColorOutput "请确保脚本能够正确克隆项目或您在正确的项目目录中" "Red"
         return $false
     }
 
@@ -322,6 +386,15 @@ function Main {
     }
 
     if (!(Test-ChromeInstallation)) {
+        exit 1
+    }
+
+    # 克隆项目
+    Write-Host ""
+    Write-ColorOutput "正在准备项目文件..." "Cyan"
+    Write-Host ""
+
+    if (!(Clone-Project)) {
         exit 1
     }
 

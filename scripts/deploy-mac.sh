@@ -314,6 +314,72 @@ show_help() {
     echo ""
 }
 
+# 克隆项目仓库
+clone_project() {
+    print_color "cyan" "🔍 正在检查项目环境..."
+
+    # 检查是否在项目目录中
+    if [[ -f "package.json" ]]; then
+        print_color "green" "✓ 已在项目目录中"
+        return 0
+    fi
+
+    print_color "yellow" "未检测到项目文件，正在克隆仓库..."
+
+    # 获取当前目录
+    local current_dir=$(pwd)
+    local project_path="$current_dir/$PROJECT_NAME"
+
+    # 如果项目目录已存在，询问是否删除
+    if [[ -d "$PROJECT_NAME" ]]; then
+        print_color "yellow" "⚠️  项目目录 '$PROJECT_NAME' 已存在"
+        read -p "是否删除现有目录并重新克隆? (y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            if rm -rf "$PROJECT_NAME"; then
+                print_color "green" "✓ 已删除现有项目目录"
+            else
+                print_color "red" "✗ 删除现有目录失败"
+                return 1
+            fi
+        else
+            print_color "yellow" "请手动进入项目目录后重新运行脚本"
+            return 1
+        fi
+    fi
+
+    # 克隆仓库
+    print_color "cyan" "正在从 GitHub 克隆仓库..."
+    if git clone "$REPO_URL" "$PROJECT_NAME"; then
+        if [[ -d "$PROJECT_NAME" ]]; then
+            # 进入项目目录
+            cd "$PROJECT_NAME"
+            print_color "green" "✓ 项目克隆成功"
+            print_color "cyan" "当前目录: $(pwd)"
+            return 0
+        else
+            print_color "red" "✗ 项目克隆失败"
+            return 1
+        fi
+    else
+        print_color "red" "✗ Git 克隆失败"
+        print_color "yellow" "可能的原因:"
+        print_color "yellow" "  • 网络连接问题"
+        print_color "yellow" "  • Git 未正确安装"
+        print_color "yellow" "  • GitHub 访问受限"
+
+        # 提供手动下载方案
+        echo ""
+        print_color "cyan" "替代方案: 手动下载项目"
+        print_color "cyan" "1. 访问: https://github.com/techfanseric/coinglass-monitor"
+        print_color "cyan" "2. 点击 'Code' -> 'Download ZIP'"
+        print_color "cyan" "3. 解压到当前目录并重命名为 '$PROJECT_NAME'"
+        print_color "cyan" "4. 重新运行此脚本"
+
+        return 1
+    fi
+}
+
 # 解析命令行参数
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
@@ -347,6 +413,10 @@ parse_arguments() {
     done
 }
 
+# 设置默认变量
+export REPO_URL="${REPO_URL:-https://github.com/techfanseric/coinglass-monitor.git}"
+export PROJECT_NAME="${PROJECT_NAME:-coinglass-monitor}"
+
 # 主执行流程
 main() {
     print_color "cyan" "========================================"
@@ -371,9 +441,16 @@ main() {
     install_git
     check_chrome
 
+    # 克隆项目
+    echo ""
+    print_color "cyan" "🚀 正在准备项目文件..."
+    echo ""
+
+    clone_project
+
     # 项目初始化
     echo ""
-    print_color "cyan" "🚀 正在初始化项目..."
+    print_color "cyan" "⚙️  正在初始化项目..."
     echo ""
 
     initialize_project

@@ -57,6 +57,17 @@ npm run setup:mac       # Run macOS-specific setup script
 npm run cleanup         # Run cleanup script (Note: cleanup.js script referenced but may not exist)
 ```
 
+### Online Installation
+```bash
+# Windows - One-command installation
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/techfanseric/coinglass-monitor/main/scripts/deploy-windows.ps1" -OutFile "deploy.ps1"
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
+.\deploy.ps1
+
+# macOS - One-command installation
+curl -fsSL https://raw.githubusercontent.com/techfanseric/coinglass-monitor/main/scripts/deploy-mac.sh | bash
+```
+
 ### Testing and Debugging
 ```bash
 npm run monitor         # Run monitoring task manually to test scraping
@@ -232,8 +243,8 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 - 要运行完整监控，需要启动主服务器 (`npm start` 或 `npm run dev`)
 
 ### 脚本说明
-- `scripts/deploy-windows.ps1` ✅ Windows 一键部署脚本（推荐新用户使用）
-- `scripts/deploy-mac.sh` ✅ macOS 一键部署脚本（推荐新用户使用）
+- `scripts/deploy-windows.ps1` ✅ Windows 一键部署脚本（自动克隆和安装依赖）
+- `scripts/deploy-mac.sh` ✅ macOS 一键部署脚本（自动克隆和安装依赖）
 - `scripts/setup-simple.js` 基础配置脚本（自动检测 Chrome 路径）
 - `scripts/setup-windows.js` Windows 特定配置脚本
 - `scripts/setup-mac.js` macOS 特定配置脚本
@@ -242,14 +253,80 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 - `scripts/cleanup.js` 清理脚本（在package.json中引用）
 
 ### 配置文件使用说明
-**新用户配置（推荐方式）**：
-1. 克隆项目到本地
-2. 运行一键部署命令：
-   - **Windows**: `npm run deploy:windows`
-   - **macOS**: `npm run deploy:mac`
-3. 等待自动安装完成，配置 .env 文件中的 EmailJS 参数
 
-**手动配置方式**：
+#### 🚀 一键部署（推荐）
+**适用场景**：全新系统，任何目录下都可以直接安装
+
+**Windows 用户**：
+```powershell
+# 方法1：在线直接运行
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/techfanseric/coinglass-monitor/main/scripts/deploy-windows.ps1" -OutFile "deploy.ps1"
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
+.\deploy.ps1
+
+# 方法2：克隆项目后运行
+git clone https://github.com/techfanseric/coinglass-monitor.git
+cd coinglass-monitor
+npm run deploy:windows
+```
+
+**macOS 用户**：
+```bash
+# 方法1：在线直接运行
+curl -fsSL https://raw.githubusercontent.com/techfanseric/coinglass-monitor/main/scripts/deploy-mac.sh | bash
+
+# 方法2：克隆项目后运行
+git clone https://github.com/techfanseric/coinglass-monitor.git
+cd coinglass-monitor
+npm run deploy:mac
+```
+
+**特点**：
+- ✅ 从零开始，自动安装所有依赖
+- ✅ 自动克隆项目到本地
+- ✅ 智能检测系统环境
+- ✅ 自动安装 Node.js、Git、Chrome
+- ✅ 适合全新系统部署
+
+---
+
+#### 💻 高级选项
+
+**Windows PowerShell 参数**：
+```powershell
+# 开发模式
+.\scripts\deploy-windows.ps1 -DevMode
+
+# 指定端口
+.\scripts\deploy-windows.ps1 -Port 8080
+
+# 跳过某些检查
+.\scripts\deploy-windows.ps1 -SkipNodeInstall -SkipChromeCheck
+```
+
+**macOS Bash 参数**：
+```bash
+# 开发模式
+./scripts/deploy-mac.sh --dev
+
+# 指定端口
+./scripts/deploy-mac.sh --port 8080
+
+# 跳过某些检查
+./scripts/deploy-mac.sh --skip-node-install --skip-chrome-check
+```
+
+**特点**：
+- ✅ 自动检测和安装 Node.js、Git、Chrome
+- ✅ 智能处理环境配置
+- ✅ 支持开发模式和自定义端口
+- ✅ 完善的错误处理和用户提示
+
+---
+
+#### 🔧 手动配置方式
+
+**传统安装**：
 1. 复制 `.env.example` 为 `.env`
 2. 运行 `npm run setup` 自动配置 Chrome 路径和创建必要目录
 3. 编辑 `.env` 文件，主要配置 `EMAILJS_PRIVATE_KEY` 和其他必要参数

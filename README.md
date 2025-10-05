@@ -14,35 +14,59 @@
 - 🔍 **调试支持**: 完整的日志系统和调试截图功能
 - ⏰ **时间控制**: 支持通知时间段设置和智能延迟发送
 
-## 快速开始
+## 🚀 一键部署（推荐）
 
-### 🚀 Windows 一键部署（推荐）
+### Windows 用户
 
+**🚀 方法一：真正的一键安装（推荐）**
 ```powershell
-# 下载并进入项目目录
-cd C:\path\to\coinglass-monitor
+# 直接在 PowerShell 中运行一条命令
+irm https://raw.githubusercontent.com/techfanseric/coinglass-monitor/main/scripts/install-online.ps1 | iex
+```
 
-# 运行一键部署脚本（自动检测环境、安装依赖、启动服务）
+**🖥️ 方法二：使用批处理文件（无需PowerShell知识）**
+```cmd
+# 下载并运行批处理文件
+curl -o quick-install.bat https://raw.githubusercontent.com/techfanseric/coinglass-monitor/main/scripts/quick-install.bat
+quick-install.bat
+```
+
+**📦 方法三：传统PowerShell脚本**
+```powershell
+# 下载并运行部署脚本
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/techfanseric/coinglass-monitor/main/scripts/deploy-windows.ps1" -OutFile "deploy.ps1"
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
+.\deploy.ps1
+```
+
+**🔧 方法四：克隆项目后部署**
+```powershell
+# 克隆项目
+git clone https://github.com/techfanseric/coinglass-monitor.git
+cd coinglass-monitor
+
+# 运行一键部署脚本
 .\scripts\deploy-windows.ps1
 
 # 或使用开发模式
 .\scripts\deploy-windows.ps1 -DevMode
 
 # 或指定端口
-.\scripts\deploy-windows.ps1 -Port 3001
+.\scripts\deploy-windows.ps1 -Port 8080
 ```
 
-**一键部署脚本功能：**
-- ✅ 自动检测并安装 Node.js (v20.12.2)
-- ✅ 自动检测并安装 Git (v2.44.0)
-- ✅ 自动检测并安装 Google Chrome
-- ✅ 自动配置项目环境
-- ✅ 安装项目依赖
-- ✅ 创建配置文件
-- ✅ 启动应用服务
-- ✅ 彩色输出和详细进度显示
+**Windows 一键部署功能：**
+- 🚀 **零干预安装**：自动处理执行策略、网络下载、目录冲突等问题
+- ✅ **智能环境检测**：自动检测并安装 Node.js、Git、Chrome
+- ✅ **自动项目获取**：支持Git克隆和ZIP下载两种方式
+- ✅ **无用户交互**：自动处理目录冲突，使用时间戳避免覆盖
+- ✅ **多重下载保障**：三种下载方法确保网络兼容性
+- ✅ **安全执行**：自动解除文件阻止标记，处理执行策略
+- ✅ **错误恢复**：Git失败时自动切换到ZIP下载
+- ✅ **进度显示**：彩色输出和详细的安装进度
+- ✅ **自动清理**：安装完成后清理临时文件
 
-**脚本参数选项：**
+**高级选项（仅适用于方法三和方法四）：**
 ```powershell
 # 跳过 Node.js 安装检查
 .\scripts\deploy-windows.ps1 -SkipNodeInstall
@@ -54,43 +78,108 @@ cd C:\path\to\coinglass-monitor
 .\scripts\deploy-windows.ps1 -DevMode
 
 # 自定义端口
-.\scripts\deploy-windows.ps1 -Port 3001
+.\scripts\deploy-windows.ps1 -Port 8080
 ```
 
-### 🖥️ macOS/Linux 快速启动
+---
+
+### macOS 用户
+
+**方法一：在线一键部署（无需预先克隆项目）**
+```bash
+# 直接运行部署脚本
+curl -fsSL https://raw.githubusercontent.com/techfanseric/coinglass-monitor/main/scripts/deploy-mac.sh | bash
+```
+
+**方法二：克隆项目后部署**
+```bash
+# 克隆项目
+git clone https://github.com/techfanseric/coinglass-monitor.git
+cd coinglass-monitor
+
+# 运行一键部署脚本
+./scripts/deploy-mac.sh
+
+# 或使用开发模式
+./scripts/deploy-mac.sh --dev
+
+# 或指定端口
+./scripts/deploy-mac.sh --port 8080
+```
+
+**macOS 一键部署功能：**
+- ✅ 自动安装 Homebrew（如果未安装）
+- ✅ 自动检测并安装 Node.js
+- ✅ 自动检测并安装 Git
+- ✅ 自动检测并安装 Google Chrome
+- ✅ 自动克隆项目（如果不存在）
+- ✅ 自动配置项目环境
+- ✅ 支持 Apple Silicon (M1/M2) 芯片
+- ✅ 智能端口冲突处理
+- ✅ 彩色输出和进度显示
+
+**脚本参数选项：**
+```bash
+# 跳过 Node.js 安装检查
+./scripts/deploy-mac.sh --skip-node-install
+
+# 跳过 Chrome 安装检查
+./scripts/deploy-mac.sh --skip-chrome-check
+
+# 使用开发模式启动
+./scripts/deploy-mac.sh --dev
+
+# 自定义端口
+./scripts/deploy-mac.sh --port 8080
+
+# 查看帮助信息
+./scripts/deploy-mac.sh --help
+```
+
+---
+
+### 部署完成后
+
+1. **访问应用**：打开浏览器访问 http://localhost:3000
+2. **配置 EmailJS**：编辑 `.env` 文件，配置 `EMAILJS_PRIVATE_KEY`
+3. **设置监控规则**：通过 Web 界面添加币种和设置阈值
+4. **启动监控**：在 Web 界面中启用监控功能
+
+### 快速命令参考
 
 ```bash
-# 进入项目目录
-cd /path/to/coinglass-monitor
+# 停止应用
+Ctrl+C
 
-# 安装依赖并启动服务
-npm install && npm run setup && npm start
+# 重新启动应用
+npm start
+
+# 开发模式
+npm run dev
+
+# 手动监控测试
+npm run monitor
+
+# 查看实时日志
+tail -f ./server.log
 ```
 
-### 平台特定快速启动
+## 🔧 传统安装方式
 
-**Mac 用户：**
-```bash
-cd /Users/ericyim/coinglass-monitor
-npm run setup && npm start
-```
-
-**Windows 用户：**
-```powershell
-cd C:\path\to\coinglass-monitor
-
-# 方式1: 一键部署脚本（推荐）
-.\scripts\deploy-windows.ps1
-
-# 方式2: 手动部署
-npm run setup && npm start
-```
+> 如果一键部署脚本无法正常工作，可以使用传统方式手动安装。
 
 ### 1. 环境准备
 
 ```bash
 # 检查 Node.js 版本 (需要 >= 18.0.0)
 node --version
+
+# 检查 Git 是否已安装
+git --version
+
+# 克隆项目
+git clone https://github.com/techfanseric/coinglass-monitor.git
+cd coinglass-monitor
 
 # 安装项目依赖
 npm install
@@ -127,7 +216,7 @@ npm run deploy:mac
 
 ### 4. 访问界面
 
-打开浏览器访问服务地址（默认为 http://localhost:3001）
+打开浏览器访问服务地址（默认为 http://localhost:3000）
 
 - 主界面：配置监控规则和查看状态
 - 健康检查：{服务地址}/health
@@ -148,7 +237,7 @@ npm run deploy:mac
    - 会生成配置文件（如果不存在）
 
 3. **端口占用**
-   - 默认使用端口 3001
+   - 默认使用端口 3000
    - 如果端口被占用，请修改 `.env` 文件中的 `PORT` 值
 
 ## 配置说明
@@ -240,7 +329,10 @@ coinglass-monitor/
 │       ├── status.js        # 状态查询API
 │       └── scrape.js        # 数据抓取API
 ├── scripts/                 # 部署和配置脚本
-│   ├── deploy-windows.ps1   # Windows 一键部署脚本
+│   ├── install-online.ps1   # Windows 在线安装脚本（零干预一键安装）
+│   ├── quick-install.bat    # Windows 批处理安装脚本（无需PowerShell知识）
+│   ├── deploy-windows.ps1   # Windows 一键部署脚本（自动克隆+安装依赖）
+│   ├── deploy-mac.sh        # macOS 一键部署脚本（自动克隆+安装依赖）
 │   ├── start-windows.bat    # Windows 启动脚本
 │   └── start-mac.sh         # macOS 启动脚本
 ├── data/                    # 本地数据存储 (运行时创建)
@@ -382,11 +474,15 @@ curl http://localhost:{端口}/api/status
 
 ## 系统要求
 
-- **Node.js**: >= 18.0.0
-- **操作系统**: Windows 10+ 或 macOS 10.15+
-- **内存**: 最少 512MB 可用内存
-- **存储**: 最少 100MB 可用磁盘空间
+- **Node.js**: >= 18.0.0 (一键部署脚本会自动安装)
+- **Git**: 用于代码克隆 (一键部署脚本会自动安装)
+- **Google Chrome**: 用于数据抓取 (一键部署脚本会自动安装)
+- **操作系统**: Windows 10+ 或 macOS 11.0+ (Big Sur)
+- **内存**: 最少 2GB 可用内存
+- **存储**: 最少 500MB 可用磁盘空间
 - **网络**: 能够访问 CoinGlass 网站和 EmailJS 服务
+
+> **注意**: 使用一键部署脚本时，Node.js、Git 和 Chrome 会自动安装，无需预先准备。
 
 ## EmailJS 配置
 
