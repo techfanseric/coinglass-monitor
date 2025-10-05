@@ -38,3 +38,7 @@ coverage/
 # 构建输出
 dist/
 build/
+
+# VSCode Counter
+.VSCodeCounter/
+.env.backup

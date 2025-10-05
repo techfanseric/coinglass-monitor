@@ -29,7 +29,7 @@
 - **状态管理**: NORMAL → ALERT → COOLDOWN 循环
 
 ### 3. 邮件通知功能
-- **邮件服务**: EmailJS (service_45oyrnq, template_6udnzxt)
+- **邮件服务**: EmailJS (service_njwa17p, template_2a6ntkh)
 - **邮件标题格式**: "14点 | CFX-5%, IOST-8%"
 - **邮件内容**:
   - 触发币种的当前状态

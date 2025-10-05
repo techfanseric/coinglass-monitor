@@ -89,6 +89,7 @@ npm run deploy
 - `GET /api/config` - 获取用户配置
 - `POST /api/config` - 保存用户配置
 - `GET /api/status` - 获取币种监控状态
+- `GET /api/history` - 获取邮件发送历史
 
 ## 监控逻辑
 
@@ -111,12 +112,24 @@ NORMAL → ALERT → COOLDOWN → ALERT → ...
 ```
 coinglass-monitor/
 ├── src/
-│   └── index.js          # Worker 主程序
+│   ├── index.js          # Worker 主程序和路由
+│   ├── modules/          # 核心业务模块
+│   │   ├── monitor.js    # 监控逻辑和阈值检查
+│   │   ├── scraper.js    # CoinGlass 数据抓取
+│   │   └── email.js      # EmailJS 邮件发送
+│   └── utils/            # 工具模块
+│       ├── config.js     # KV 存储操作
+│       └── parser.js     # HTML 解析工具
+├── tests/                # 测试文件
+│   ├── unit/            # 单元测试
+│   ├── integration/     # 集成测试
+│   ├── fixtures/        # 测试数据
+│   └── setup.js         # 测试环境配置
 ├── wrangler.toml         # Cloudflare 配置
+├── vitest.config.js      # 测试配置
 ├── package.json          # 项目依赖
-├── .env.example          # 环境变量模板
+├── send-test-email.js    # 邮件发送测试脚本
 ├── email-template.html   # 邮件模板
-├── project-requirements.md # 需求文档
 └── README.md             # 项目说明
 ```
 
@@ -131,10 +144,18 @@ npm run dev
 # 查看实时日志
 npm run tail
 
+# 运行测试
+npm test
+npm run test:coverage
+npm run test:watch
+
 # KV 操作
 npm run kv:list
 npm run kv:get user_settings
 npm run kv:put user_settings '{"test": "data"}'
+
+# 邮件发送测试
+node send-test-email.js
 ```
 
 ### 部署命令
@@ -165,8 +186,11 @@ wrangler tail --since=1h
 ### 测试邮件发送
 
 ```bash
-# 触发手动测试
-curl -X POST https://your-worker.your-subdomain.workers.dev/api/test-email
+# 运行邮件发送测试脚本
+node send-test-email.js
+
+# 或访问本地开发服务器
+http://localhost:58477
 ```
 
 ## 成本分析

@@ -18,10 +18,10 @@ crons = ["0 * * * *"]
 # 环境变量
 [vars]
 ENVIRONMENT = "production"
-# EmailJS配置 (通过环境变量加载)
-# EMAILJS_PUBLIC_KEY
-# EMAILJS_SERVICE_ID
-# EMAILJS_TEMPLATE_ID
+EMAILJS_PUBLIC_KEY = "R2I8depNfmvcV7eTz"
+EMAILJS_SERVICE_ID = "service_njwa17p"
+EMAILJS_TEMPLATE_ID = "template_2a6ntkh"
+EMAILJS_PRIVATE_KEY = "R2I8depNfmvcV7eTz"
 
 # 开发环境配置
 [env.development]

@@ -2,16 +2,13 @@
   "name": "coinglass-monitor",
   "version": "1.0.0",
   "description": "CoinGlass 利率监控提醒系统",
+  "type": "module",
   "main": "src/index.js",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "deploy:dev": "wrangler deploy --env development",
-    "deploy:preview": "wrangler deploy --env preview",
+    "deploy": "wrangler deploy --env=\"\"",
     "tail": "wrangler tail",
-    "kv:list": "wrangler kv:key list --namespace-id=your-config-namespace-id",
-    "kv:get": "wrangler kv:key get --namespace-id=your-config-namespace-id",
-    "kv:put": "wrangler kv:key put --namespace-id=your-config-namespace-id"
+    "test": "vitest"
   },
   "keywords": [
     "cloudflare",
@@ -23,7 +20,11 @@
   "author": "Your Name",
   "license": "MIT",
   "devDependencies": {
-    "wrangler": "^3.114.14"
+    "@vitest/coverage-v8": "^1.0.0",
+    "@vitest/ui": "^1.0.0",
+    "msw": "^2.0.0",
+    "vitest": "^1.0.0",
+    "wrangler": "^4.42.0"
   },
   "engines": {
     "node": ">=16.0.0"

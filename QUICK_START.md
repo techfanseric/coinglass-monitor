@@ -8,10 +8,10 @@
 cd /Users/ericyim/coinglass-monitor
 
 # 给脚本执行权限
-chmod +x deploy.sh
+chmod +x deploy-with-env.sh
 
 # 运行自动化部署脚本
-./deploy.sh
+./deploy-with-env.sh
 ```
 
 
@@ -64,7 +64,7 @@ wrangler secret put EMAILJS_PRIVATE_KEY
 # 当提示时，输入你的 EmailJS Private Key
 
 # 5. 重新部署
-./deploy.sh
+./deploy-with-env.sh
 ```
 
 ### 查看日志
@@ -75,8 +75,11 @@ wrangler tail
 
 ### 手动测试
 ```bash
-# 触发定时任务测试
-wrangler dev
+# 运行邮件发送测试
+node send-test-email.js
+
+# 或启动开发服务器
+npm run dev
 ```
 
 ## 📊 监控功能

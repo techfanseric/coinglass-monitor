@@ -65,11 +65,105 @@ export function isWithinNotificationHours(config) {
 }
 
 /**
+ * 检查当前时间是否满足触发条件
+ */
+export function shouldTriggerNow(config) {
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+
+  // 如果没有配置触发设置，使用默认行为（每小时0分触发）
+  if (!config.trigger_settings) {
+    return currentMinute === 0;
+  }
+
+  const triggerSettings = config.trigger_settings;
+
+  // 检查每时触发 - 总是启用
+  if (currentMinute === triggerSettings.hourly_minute) {
+    return true;
+  }
+
+  // 检查每24时触发 - 总是启用
+  if (currentHour === triggerSettings.daily_hour &&
+      currentMinute === triggerSettings.daily_minute) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * 获取下一个触发时间
+ */
+export function getNextTriggerTime(config) {
+  const now = new Date();
+
+  // 如果没有配置触发设置，使用默认行为（下一个小时0分）
+  if (!config.trigger_settings) {
+    const nextHour = new Date(now);
+    nextHour.setHours(nextHour.getHours() + 1);
+    nextHour.setMinutes(0);
+    nextHour.setSeconds(0);
+    nextHour.setMilliseconds(0);
+    return nextHour;
+  }
+
+  const triggerSettings = config.trigger_settings;
+  const possibleTimes = [];
+
+  // 计算下一个每时触发时间 - 总是启用
+  const nextHourly = new Date(now);
+  if (now.getMinutes() < triggerSettings.hourly_minute) {
+    nextHourly.setMinutes(triggerSettings.hourly_minute);
+  } else {
+    nextHourly.setHours(nextHourly.getHours() + 1);
+    nextHourly.setMinutes(triggerSettings.hourly_minute);
+  }
+  nextHourly.setSeconds(0);
+  nextHourly.setMilliseconds(0);
+  possibleTimes.push(nextHourly);
+
+  // 计算下一个每24时触发时间 - 总是启用
+  const nextDaily = new Date(now);
+  if (now.getHours() < triggerSettings.daily_hour ||
+      (now.getHours() === triggerSettings.daily_hour && now.getMinutes() < triggerSettings.daily_minute)) {
+    nextDaily.setHours(triggerSettings.daily_hour);
+    nextDaily.setMinutes(triggerSettings.daily_minute);
+  } else {
+    nextDaily.setDate(nextDaily.getDate() + 1);
+    nextDaily.setHours(triggerSettings.daily_hour);
+    nextDaily.setMinutes(triggerSettings.daily_minute);
+  }
+  nextDaily.setSeconds(0);
+  nextDaily.setMilliseconds(0);
+  possibleTimes.push(nextDaily);
+
+  // 返回最早的触发时间
+  return new Date(Math.min(...possibleTimes.map(t => t.getTime())));
+}
+
+/**
  * 解析时间字符串为分钟数
  */
 export function parseTime(timeString) {
   const [hours, minutes] = timeString.split(':').map(Number);
   return hours * 60 + minutes;
+}
+
+/**
+ * 生成 cron 表达式
+ */
+export function generateCronExpression(config) {
+  // 如果没有配置触发设置，使用默认表达式（每小时0分）
+  if (!config.trigger_settings) {
+    return "0 * * * *";
+  }
+
+  const triggerSettings = config.trigger_settings;
+
+  // 每时触发更频繁，优先使用它来保证监控的及时性
+  return `${triggerSettings.hourly_minute} * * * *`;
 }
 
 /**

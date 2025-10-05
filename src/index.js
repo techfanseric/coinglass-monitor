@@ -57,10 +57,12 @@ export default {
       return getEmailHistory(env);
     }
 
+  
     // 默认返回
     return new Response('Not Found', { status: 404 });
   },
 };
+
 
 /**
  * 获取主页
@@ -1060,3 +1062,5 @@ async function getEmailHistory(env) {
     });
   }
 }
+
+

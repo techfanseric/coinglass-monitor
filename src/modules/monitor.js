@@ -2,13 +2,13 @@
  * 监控逻辑模块
  */
 
-import { getUserConfig, getCoinState, updateCoinState, isWithinNotificationHours, getNextNotificationTime, scheduleNotification } from '../utils/config.js';
+import { getUserConfig, getCoinState, updateCoinState, isWithinNotificationHours, getNextNotificationTime, scheduleNotification, shouldTriggerNow } from '../utils/config.js';
 
 /**
  * 运行监控逻辑
  */
 export async function runMonitoring(env) {
-  console.log('1. 开始抓取 CoinGlass 数据...');
+  console.log('1. 开始执行监控任务...');
 
   // 2. 获取用户配置（先获取配置以确定筛选器）
   const config = await getUserConfig(env);
@@ -17,7 +17,15 @@ export async function runMonitoring(env) {
     return;
   }
 
-  // 1. 抓取数据（使用配置中的筛选器）
+  // 1. 检查当前时间是否满足触发条件
+  if (!shouldTriggerNow(config)) {
+    console.log('当前时间不满足触发条件，跳过本次监控');
+    return;
+  }
+
+  console.log('2. 触发条件满足，开始抓取 CoinGlass 数据...');
+
+  // 3. 抓取数据（使用配置中的筛选器）
   const filters = config.filters || { exchange: 'binance', coin: 'USDT', timeframe: '1h' };
   const { fetchRateData } = await import('./scraper.js');
   const rateData = await fetchRateData(filters);
@@ -26,15 +34,15 @@ export async function runMonitoring(env) {
     return;
   }
 
-  console.log('2. 数据抓取成功，开始检查阈值...');
+  console.log('3. 数据抓取成功，开始检查阈值...');
   console.log('使用筛选器:', filters);
 
-  // 3. 检查每个币种的阈值
+  // 4. 检查每个币种的阈值
   for (const coin of config.coins.filter(c => c.enabled)) {
     await checkCoinThreshold(env, coin, rateData, config);
   }
 
-  console.log('3. 阈值检查完成');
+  console.log('4. 阈值检查完成');
 }
 
 /**
