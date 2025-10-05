@@ -16,7 +16,48 @@
 
 ## 快速开始
 
-### 🚀 一键启动（推荐）
+### 🚀 Windows 一键部署（推荐）
+
+```powershell
+# 下载并进入项目目录
+cd C:\path\to\coinglass-monitor
+
+# 运行一键部署脚本（自动检测环境、安装依赖、启动服务）
+.\scripts\deploy-windows.ps1
+
+# 或使用开发模式
+.\scripts\deploy-windows.ps1 -DevMode
+
+# 或指定端口
+.\scripts\deploy-windows.ps1 -Port 3001
+```
+
+**一键部署脚本功能：**
+- ✅ 自动检测并安装 Node.js (v20.12.2)
+- ✅ 自动检测并安装 Git (v2.44.0)
+- ✅ 自动检测并安装 Google Chrome
+- ✅ 自动配置项目环境
+- ✅ 安装项目依赖
+- ✅ 创建配置文件
+- ✅ 启动应用服务
+- ✅ 彩色输出和详细进度显示
+
+**脚本参数选项：**
+```powershell
+# 跳过 Node.js 安装检查
+.\scripts\deploy-windows.ps1 -SkipNodeInstall
+
+# 跳过 Chrome 安装检查
+.\scripts\deploy-windows.ps1 -SkipChromeCheck
+
+# 使用开发模式启动
+.\scripts\deploy-windows.ps1 -DevMode
+
+# 自定义端口
+.\scripts\deploy-windows.ps1 -Port 3001
+```
+
+### 🖥️ macOS/Linux 快速启动
 
 ```bash
 # 进入项目目录
@@ -35,8 +76,13 @@ npm run setup && npm start
 ```
 
 **Windows 用户：**
-```cmd
+```powershell
 cd C:\path\to\coinglass-monitor
+
+# 方式1: 一键部署脚本（推荐）
+.\scripts\deploy-windows.ps1
+
+# 方式2: 手动部署
 npm run setup && npm start
 ```
 
@@ -194,6 +240,7 @@ coinglass-monitor/
 │       ├── status.js        # 状态查询API
 │       └── scrape.js        # 数据抓取API
 ├── scripts/                 # 部署和配置脚本
+│   ├── deploy-windows.ps1   # Windows 一键部署脚本
 │   ├── start-windows.bat    # Windows 启动脚本
 │   └── start-mac.sh         # macOS 启动脚本
 ├── data/                    # 本地数据存储 (运行时创建)
@@ -245,6 +292,9 @@ curl http://localhost:{端口}/api/status
 # 统一配置
 npm run setup            # 创建必要目录和配置文件
 
+# Windows 一键部署（推荐）
+.\scripts\deploy-windows.ps1      # PowerShell 脚本，自动处理所有环境配置
+
 # 平台特定启动方式（仍可用）
 npm run deploy:windows   # Windows 用户启动
 npm run deploy:mac       # macOS 用户启动
@@ -252,6 +302,38 @@ npm run deploy:mac       # macOS 用户启动
 # 清理脚本
 npm run cleanup          # 清理旧数据和日志（如果脚本存在）
 ```
+
+### Windows 一键部署脚本详细说明
+
+**脚本功能：**
+- 🔍 **环境检测**: 自动检查 PowerShell 版本、网络连接、管理员权限
+- 📦 **依赖安装**: 自动下载并安装 Node.js、Git、Chrome
+- ⚙️ **项目配置**: 自动创建配置文件、安装依赖、设置 Chrome 路径
+- 🚀 **服务启动**: 自动启动应用并验证服务状态
+- 🎨 **用户体验**: 彩色输出、进度显示、详细错误信息
+
+**使用方式：**
+```powershell
+# 基础部署
+.\scripts\deploy-windows.ps1
+
+# 开发模式
+.\scripts\deploy-windows.ps1 -DevMode
+
+# 自定义端口
+.\scripts\deploy-windows.ps1 -Port 3001
+
+# 跳过特定检查
+.\scripts\deploy-windows.ps1 -SkipNodeInstall
+.\scripts\deploy-windows.ps1 -SkipChromeCheck
+```
+
+**脚本执行流程：**
+1. 检查系统环境（PowerShell版本、网络、权限）
+2. 安装必需软件（Node.js、Git、Chrome）
+3. 配置项目环境（安装依赖、创建配置文件）
+4. 启动应用服务（开发或生产模式）
+5. 验证服务状态并提供访问信息
 
 ## 监控和调试
 
@@ -361,21 +443,81 @@ curl http://localhost:{端口}/api/status
 
 ### 调试步骤
 
+**通用调试：**
 1. **查看日志**: `tail -f ./server.log`
 2. **检查配置**: `curl http://localhost:3001/api/config`
 3. **测试监控**: `npm run monitor`
 4. **验证服务器**: `curl http://localhost:3001/health`
 5. **检查数据目录**: 确认 `data/` 目录权限正常
 
+**Windows 专用调试：**
+```powershell
+# 检查 PowerShell 执行策略
+Get-ExecutionPolicy
+
+# 如果限制执行，设置允许脚本运行
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# 查看网络连接状态
+Test-NetConnection -ComputerName "google.com" -Port 443
+
+# 检查 Node.js 和 Git 安装
+node --version
+git --version
+
+# 查看进程状态
+Get-Process | Where-Object {$_.ProcessName -like "*node*"}
+
+# 检查端口占用
+netstat -ano | findstr :3001
+```
+
+### Windows PowerShell 脚本问题解决
+
+**执行策略限制：**
+```powershell
+# 查看当前执行策略
+Get-ExecutionPolicy
+
+# 允许脚本执行（推荐）
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# 临时允许单次执行
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-windows.ps1
+```
+
+**网络连接问题：**
+```powershell
+# 测试网络连接
+Test-NetConnection -ComputerName "google.com" -Port 443
+
+# 检查代理设置
+netsh winhttp show proxy
+
+# 如果需要配置代理
+netsh winhttp set proxy <proxy-server>:<port>
+```
+
+**权限问题：**
+- 右键 PowerShell 选择"以管理员身份运行"
+- 或者临时提升权限：`Start-Process powershell -Verb runAs`
+
 ### Puppeteer 问题解决
 
 **Windows 用户**:
-- 可能需要安装 Windows Build Tools
-- 确保系统有足够的内存启动浏览器
+- 一键部署脚本已包含 Chrome 安装
+- 可能需要安装 Windows Build Tools（某些情况下）
+- 确保系统有足够的内存启动浏览器（建议至少 2GB 可用内存）
 
 **macOS 用户**:
-- 确保有足够的磁盘空间
+- 确保有足够的磁盘空间（建议至少 500MB）
 - 某些情况下可能需要更新 Xcode Command Line Tools
+- 运行 `xcode-select --install` 安装开发工具
+
+**通用解决方案：**
+- 脚本失败时检查网络连接和防火墙设置
+- 如果自动安装失败，请手动下载并安装相应软件
+- 确保杀毒软件没有阻止脚本执行
 
 ## 贡献指南
 
