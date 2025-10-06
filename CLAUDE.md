@@ -78,8 +78,8 @@ npm run setup           # Run general setup script (auto-detects Chrome and crea
 
 ### Application Startup
 ```bash
-# Windows PowerShell startup script (recommended)
-.\scripts\start-windows.ps1
+# Windows Batch startup script
+.\scripts\start-windows.bat
 
 # macOS Bash startup script
 ./scripts/start-mac.sh
@@ -342,56 +342,33 @@ CHANGELOG.md 必须面向用户，关注功能改进和体验提升，避免技�
 - 要运行完整监控，需要启动主服务器 (`npm start` 或 `npm run dev`)
 
 ### 脚本说明
-- `scripts/start-windows.ps1` ✅ Windows PowerShell 启动脚本（推荐）
+- `scripts/start-windows.bat` ✅ Windows 批处理启动脚本
 - `scripts/start-mac.sh` ✅ macOS Bash 启动脚本
 
 **注意**:
-- 启动脚本支持端口冲突检测和处理
-- 基础配置功能现在通过 `npm run setup` 命令提供
+- 启动脚本已简化为直接启动生产模式
+- 基础配置功能通过 `npm run setup` 命令提供
 
 ### 配置文件使用说明
 
 #### 🔧 启动脚本使用
 
-**Windows PowerShell 启动脚本**：
-```powershell
-# 基础启动
-.\scripts\start-windows.ps1
-
-# 开发模式
-.\scripts\start-windows.ps1 -Dev
-
-# 调试模式
-.\scripts\start-windows.ps1 -Debug
-
-# 自定义端口
-.\scripts\start-windows.ps1 -Port 8080
-
-# 组合参数
-.\scripts\start-windows.ps1 -Dev -Port 8080
+**Windows 批处理启动脚本**：
+```batch
+# 生产模式启动
+.\scripts\start-windows.bat
 ```
 
 **macOS Bash 启动脚本**：
 ```bash
-# 基础启动
+# 生产模式启动
 ./scripts/start-mac.sh
-
-# 开发模式
-./scripts/start-mac.sh --dev
-
-# 调试模式
-./scripts/start-mac.sh --debug
-
-# 自定义端口
-./scripts/start-mac.sh --port 8080
 ```
 
 **启动脚本功能**：
-- ✅ 自动检测 Node.js 和 npm 版本
-- ✅ 智能端口冲突处理
-- ✅ 自动创建必要目录
-- ✅ 依赖检查和更新提醒
-- ✅ 完善的错误处理和用户提示
+- ✅ 直接启动生产模式
+- ✅ 简化的启动流程
+- ✅ 自动切换到项目目录
 
 ---
 
