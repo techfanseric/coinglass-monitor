@@ -74,7 +74,6 @@ npm run monitor         # Run monitoring service standalone
 ### Platform-specific Scripts
 ```bash
 npm run setup           # Run general setup script (auto-detects Chrome and creates directories)
-npm run cleanup         # Run cleanup script (Note: cleanup.js script referenced but may not exist)
 ```
 
 ### Application Startup
@@ -265,6 +264,7 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 - **灵活配置**：支持仅每小时、仅每24小时或同时启用
 
 ## API接口
+- `GET /` - 主页面（前端界面）
 - `GET /api/config` - 获取用户配置
 - `POST /api/config` - 保存用户配置
 - `GET /api/status` - 获取当前监控状态
@@ -273,7 +273,9 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 - `GET /api/scrape/status` - 获取当前抓取状态（实时进度）
 - `GET /api/scrape/service-status` - 获取抓取服务状态（浏览器服务状态）
 - `GET /api/scrape/history` - 获取抓取历史记录
-- `GET /health` - 服务器健康检查
+- `GET /api/version` - 获取版本信息（从CHANGELOG.md读取）
+- `GET /health` - 服务器健康检查（包含版本信息）
+- `GET /CHANGELOG.md` - 获取更新日志（JSON格式）
 
 ## EmailJS配置
 系统支持通过 EmailJS 发送邮件通知，需要配置以下参数：
@@ -342,10 +344,9 @@ CHANGELOG.md 必须面向用户，关注功能改进和体验提升，避免技�
 ### 脚本说明
 - `scripts/start-windows.ps1` ✅ Windows PowerShell 启动脚本（推荐）
 - `scripts/start-mac.sh` ✅ macOS Bash 启动脚本
-- `scripts/cleanup.js` 清理脚本（在package.json中引用）
 
 **注意**:
-- 部署脚本 (`deploy-windows.ps1`, `deploy-mac.sh`) 已被简化为启动脚本
+- 启动脚本支持端口冲突检测和处理
 - 基础配置功能现在通过 `npm run setup` 命令提供
 
 ### 配置文件使用说明
@@ -418,14 +419,16 @@ CHANGELOG.md 必须面向用户，关注功能改进和体验提升，避免技�
 - **历史数据**：查看抓取历史和邮件发送记录
 - **日志查看**：通过界面查看系统日志
 - **手动操作**：手动触发数据抓取和监控任务
+- **版本管理**：查看当前版本和更新日志
+- **邮件分组**：支持多个邮件接收者分组管理
+- **实时进度**：手动抓取时显示详细进度信息
 
-### API 端点
-- `GET /` - 主页面（前端界面）
-- `GET /api/config` - 获取配置
-- `POST /api/config` - 保存配置
-- `GET /api/status` - 获取监控状态
-- `GET /api/scrape` - 手动触发数据抓取
-- `GET /health` - 健康检查
+### 前端模块化架构
+- **index.html** - 纯HTML结构（147行）
+- **style.css** - 完整UI样式（475行），含响应式设计
+- **script.js** - 前端逻辑（913行），含配置管理和状态更新
+- **模块化设计** - 代码分离，提升可维护性
+- **配置注入** - 服务端动态注入环境变量
 
 ## 技术栈详情
 

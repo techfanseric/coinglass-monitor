@@ -28,6 +28,26 @@ const envPath = path.join(projectRoot, '.env');
 
 // 日志文件现在由LoggerService统一管理
 
+// 读取版本信息
+async function getVersionInfo() {
+  try {
+    const changelogPath = path.join(__dirname, '..', 'CHANGELOG.md');
+    const content = await fs.readFile(changelogPath, 'utf8');
+    const changelogData = JSON.parse(content);
+
+    if (changelogData && changelogData.length > 0) {
+      const latest = changelogData[0];
+      return {
+        version: latest.version,
+        date: latest.date
+      };
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
 try {
   dotenv.config({ path: envPath });
   console.log('✅ 已加载环境配置 (.env)');
@@ -451,20 +471,37 @@ app.get('/CHANGELOG.md', async (req, res) => {
 });
 
 
+// 版本信息API端点
+app.get('/api/version', async (req, res) => {
+  const versionInfo = await getVersionInfo();
+  if (versionInfo) {
+    res.json(versionInfo);
+  } else {
+    res.status(404).json({ error: '版本信息不可用' });
+  }
+});
+
 // 健康检查端点
-app.get('/health', (req, res) => {
-  res.json({
+app.get('/health', async (req, res) => {
+  const versionInfo = await getVersionInfo();
+  const healthData = {
     status: 'ok',
     timestamp: formatDateTime(new Date()),
     platform: platform,
     environment: NODE_ENV,
-    version: '1.0.0',
     services: {
       storage: '本地文件系统',
       email: 'EmailJS',
       scraper: 'Puppeteer'
     }
-  });
+  };
+
+  if (versionInfo) {
+    healthData.version = versionInfo.version;
+    healthData.versionDate = versionInfo.date;
+  }
+
+  res.json(healthData);
 });
 
 // 前端界面路由 - 必须在API路由之后

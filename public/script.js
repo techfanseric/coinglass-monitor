@@ -24,6 +24,13 @@ document.addEventListener('DOMContentLoaded', function() {
     // 初始化模块
     initializeModules();
 
+    // 加载版本信息
+    if (window.appSystem) {
+        window.appSystem.loadVersionInfo().catch(error => {
+            console.error('版本加载失败:', error);
+        });
+    }
+
     // 先加载配置，然后加载状态
     window.appConfig.loadConfig().then(() => {
         window.appMonitorUI.loadStatus();

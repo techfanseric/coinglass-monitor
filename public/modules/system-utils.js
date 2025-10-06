@@ -196,6 +196,34 @@ class SystemUtils {
         }
     }
 
+    // 加载版本信息
+    async loadVersionInfo() {
+        try {
+            const response = await fetch('/api/version');
+            if (!response.ok) {
+                const versionBadge = document.getElementById('versionBadge');
+                if (versionBadge) {
+                    versionBadge.style.display = 'none';
+                }
+                return null;
+            }
+
+            const versionInfo = await response.json();
+            const versionBadge = document.getElementById('versionBadge');
+            if (versionBadge) {
+                versionBadge.textContent = versionInfo.version;
+            }
+
+            return versionInfo;
+        } catch (error) {
+            const versionBadge = document.getElementById('versionBadge');
+            if (versionBadge) {
+                versionBadge.style.display = 'none';
+            }
+            return null;
+        }
+    }
+
     // 加载更新日志数据
     async loadChangelog() {
         const content = document.getElementById('changelogContent');
