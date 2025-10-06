@@ -25,20 +25,176 @@ body {
 .header {
     background: #f8fafc;
     color: #4a5568;
-    padding: 16px 20px;
-    text-align: center;
     border-bottom: 1px solid #e2e8f0;
+    position: relative;
 }
 
-.header h1 {
+.header-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+}
+
+.header-title {
+    text-align: left;
+}
+
+.header-title h1 {
     font-size: 1.25em;
     font-weight: 600;
     margin-bottom: 2px;
 }
 
-.header p {
+.header-title p {
     font-size: 0.875em;
     color: #718096;
+}
+
+.header-info {
+    display: flex;
+    align-items: center;
+}
+
+.version-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 6px 12px;
+    border-radius: 20px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    transition: all 0.2s ease;
+}
+
+.version-info:hover {
+    background: #f1f5f9;
+    border-color: #cbd5e0;
+    transform: translateY(-1px);
+}
+
+.version-badge {
+    font-size: 0.75em;
+    font-weight: 600;
+    color: #4a5568;
+    background: #e2e8f0;
+    padding: 2px 8px;
+    border-radius: 12px;
+}
+
+.changelog-toggle {
+    font-size: 0.875em;
+    color: #718096;
+    transition: color 0.2s ease;
+}
+
+.version-info:hover .changelog-toggle {
+    color: #4a5568;
+}
+
+.changelog-container {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease-out;
+    background: #ffffff;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.changelog-container.expanded {
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.changelog-content {
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: opacity 0.2s ease-out 0.1s, transform 0.2s ease-out 0.1s;
+    padding: 20px; /* 边距始终存在 */
+    font-size: 0.875em;
+    line-height: 1.6;
+}
+
+.changelog-container.expanded .changelog-content {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.changelog-item {
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #f1f5f9;
+}
+
+.changelog-item:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.changelog-version {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.changelog-version-number {
+    font-weight: 600;
+    color: #2d3748;
+    background: #e2e8f0;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75em;
+}
+
+.changelog-date {
+    color: #718096;
+    font-size: 0.8em;
+}
+
+.changelog-description {
+    color: #4a5568;
+    font-weight: 500;
+    margin-bottom: 8px;
+}
+
+.changelog-changes {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.changelog-changes li {
+    padding: 2px 0;
+    color: #718096;
+    font-size: 0.85em;
+    line-height: 1.4;
+}
+
+.changelog-loading {
+    text-align: center;
+    color: #718096;
+    padding: 20px;
+}
+
+@media (max-width: 600px) {
+    .header-main {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 16px;
+    }
+
+    .header-title {
+        text-align: center;
+        width: 100%;
+    }
+
+    .header-info {
+        width: 100%;
+        justify-content: center;
+    }
 }
 
 .content {

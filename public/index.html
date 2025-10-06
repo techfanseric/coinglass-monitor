@@ -9,8 +9,23 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>CoinGlass 利率监控</h1>
-            <p>实时监控币种借贷利率</p>
+            <div class="header-main">
+                <div class="header-title">
+                    <h1>CoinGlass 利率监控</h1>
+                    <p>实时监控币种借贷利率</p>
+                </div>
+                <div class="header-info">
+                    <div class="version-info" onclick="toggleChangelog()">
+                        <span class="version-badge">v25.10.6.8</span>
+                        <span class="changelog-toggle" id="changelogToggle">📋 更新日志</span>
+                    </div>
+                </div>
+            </div>
+            <div class="changelog-container" id="changelogContainer">
+                <div class="changelog-content" id="changelogContent">
+                    <div class="changelog-loading">正在加载更新日志...</div>
+                </div>
+            </div>
         </div>
 
         <div class="content">

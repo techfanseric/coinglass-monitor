@@ -1011,3 +1011,169 @@
         window.addEventListener('beforeunload', function() {
             stopLogPolling();
         });
+
+        // 更新日志功能相关变量和函数
+        let changelogLoaded = false;
+        let changelogData = null;
+
+        // 切换更新日志显示
+        async function toggleChangelog() {
+            const container = document.getElementById('changelogContainer');
+            const toggle = document.getElementById('changelogToggle');
+
+            if (container.classList.contains('expanded')) {
+                // 收起日志
+                container.classList.remove('expanded');
+                toggle.textContent = '📋 更新日志';
+            } else {
+                // 展开日志
+                container.classList.add('expanded');
+                toggle.textContent = '📋 收起日志';
+
+                // 首次展开时加载数据
+                if (!changelogLoaded) {
+                    await loadChangelog();
+                }
+            }
+        }
+
+        // 加载更新日志数据
+        async function loadChangelog() {
+            const content = document.getElementById('changelogContent');
+
+            try {
+                // 从CHANGELOG.md文件读取数据
+                const response = await fetch('/CHANGELOG.md');
+                if (!response.ok) {
+                    throw new Error('无法读取更新日志文件');
+                }
+
+                const changelogText = await response.text();
+
+                // 尝试解析JSON格式的更新日志
+                try {
+                    changelogData = JSON.parse(changelogText);
+                    renderChangelog();
+                } catch (parseError) {
+                    // 如果JSON解析失败，尝试解析Markdown格式
+                    changelogData = parseMarkdownChangelog(changelogText);
+                    renderChangelog();
+                }
+
+                changelogLoaded = true;
+            } catch (error) {
+                console.error('加载更新日志失败:', error);
+                content.innerHTML = `
+                    <div class="changelog-item">
+                        <div class="changelog-description">
+                            无法加载更新日志，请稍后重试
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        // 解析Markdown格式的更新日志
+        function parseMarkdownChangelog(markdown) {
+            const lines = markdown.split('\n');
+            const changelog = [];
+            let currentItem = null;
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+
+                // 匹配版本标题格式 ## [version] - date
+                const versionMatch = line.match(/^##\s*\[?([v\d\.]+)\]?\s*(?:-\s*(\d{4}-\d{2}-\d{2}))?/);
+                if (versionMatch) {
+                    // 保存上一个项目
+                    if (currentItem) {
+                        changelog.push(currentItem);
+                    }
+
+                    // 开始新项目
+                    currentItem = {
+                        version: versionMatch[1],
+                        date: versionMatch[2] || '未知日期',
+                        description: '',
+                        changes: []
+                    };
+                    continue;
+                }
+
+                // 匹配描述行
+                if (currentItem && line && !line.startsWith('#') && !line.startsWith('*') && !line.startsWith('-')) {
+                    if (currentItem.description) {
+                        currentItem.description += ' ' + line;
+                    } else {
+                        currentItem.description = line;
+                    }
+                    continue;
+                }
+
+                // 匹配变化列表项
+                if (currentItem && (line.startsWith('*') || line.startsWith('-'))) {
+                    const change = line.replace(/^[\*\-\s]+/, '').trim();
+                    if (change) {
+                        currentItem.changes.push(change);
+                    }
+                }
+            }
+
+            // 添加最后一个项目
+            if (currentItem) {
+                changelog.push(currentItem);
+            }
+
+            return changelog;
+        }
+
+        // 渲染更新日志
+        function renderChangelog() {
+            const content = document.getElementById('changelogContent');
+
+            if (!changelogData || changelogData.length === 0) {
+                content.innerHTML = `
+                    <div class="changelog-item">
+                        <div class="changelog-description">
+                            暂无更新日志
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '';
+
+            changelogData.forEach(item => {
+                html += `
+                    <div class="changelog-item">
+                        <div class="changelog-version">
+                            <span class="changelog-version-number">${item.version}</span>
+                            <span class="changelog-date">${item.date}</span>
+                        </div>
+                        <div class="changelog-description">${item.description}</div>
+                        ${item.changes && item.changes.length > 0 ? `
+                            <ul class="changelog-changes">
+                                ${item.changes.map(change => `<li>${change}</li>`).join('')}
+                            </ul>
+                        ` : ''}
+                    </div>
+                `;
+            });
+
+            content.innerHTML = html;
+        }
+
+        // 点击页面其他地方关闭更新日志（可选功能）
+        document.addEventListener('click', function(event) {
+            const changelogContainer = document.getElementById('changelogContainer');
+            const versionInfo = document.querySelector('.version-info');
+
+            if (changelogContainer.classList.contains('expanded') &&
+                !changelogContainer.contains(event.target) &&
+                !versionInfo.contains(event.target)) {
+
+                // 如果需要点击其他地方自动关闭，取消下面这行的注释
+                // toggleChangelog();
+            }
+        });

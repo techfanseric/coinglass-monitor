@@ -137,9 +137,10 @@ async function askToKillProcess(port, processInfo) {
     return true;
   }
 
-  console.log('💡 建议关闭占用进程以继续启动');
-  console.log('📝 直接回车 = 关闭占用进程并继续');
+  console.log('💡 请选择处理方式：');
+  console.log('📝 直接回车 = 自动关闭占用进程并继续启动');
   console.log('📝 Ctrl+C = 退出程序');
+  console.log('⏱️  10秒后未选择将自动处理...');
   console.log('');
 
   const rl = readline.createInterface({
@@ -147,21 +148,42 @@ async function askToKillProcess(port, processInfo) {
     output: process.stdout
   });
 
-  return new Promise((resolve) => {
-    rl.question('', (answer) => {
-      rl.close();
-      // 直接回车或任何输入都继续（关闭进程）
-      resolve(true);
-    });
+  let countdown = 10;
+  let countdownInterval;
 
-    // 设置超时，10秒后自动继续
-    setTimeout(() => {
-      if (!rl.closed) {
+  return new Promise((resolve) => {
+    // 开始倒计时
+    countdownInterval = setInterval(() => {
+      if (countdown > 0 && !rl.closed) {
+        process.stdout.write(`\r⏱️  倒计时: ${countdown}秒`);
+        countdown--;
+      } else if (countdown === 0 && !rl.closed) {
+        clearInterval(countdownInterval);
+        process.stdout.write('\r⏱️  倒计时结束，自动处理中...          \n');
         rl.close();
-        console.log('\n⏰ 超时，自动继续启动...');
+        console.log('✅ 已自动选择：关闭占用进程并继续启动');
         resolve(true);
       }
-    }, 10000);
+    }, 1000);
+
+    rl.question('', (answer) => {
+      if (!rl.closed) {
+        clearInterval(countdownInterval);
+        rl.close();
+        console.log('✅ 已选择：关闭占用进程并继续启动');
+        resolve(true);
+      }
+    });
+
+    // 监听 Ctrl+C
+    rl.on('SIGINT', () => {
+      if (!rl.closed) {
+        clearInterval(countdownInterval);
+        rl.close();
+        console.log('\n❌ 用户取消操作');
+        resolve(false);
+      }
+    });
   });
 }
 
@@ -201,6 +223,11 @@ async function handlePortOccupancy() {
   if (isOccupied) {
     const processInfo = getPortProcess(port);
     const shouldKill = await askToKillProcess(port, processInfo);
+
+    if (shouldKill === false) {
+      console.log('❌ 用户取消操作，程序退出');
+      process.exit(0);
+    }
 
     if (shouldKill && processInfo?.pid && processInfo.pid !== 'unknown') {
       console.log('🔄 正在关闭占用进程...');
@@ -398,6 +425,18 @@ console.log('✅ API 路由加载完成');
 
 // 静态文件服务 - 提供前端界面
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// 提供CHANGELOG.md文件访问
+app.get('/CHANGELOG.md', async (req, res) => {
+  try {
+    const changelogPath = path.join(__dirname, '..', 'CHANGELOG.md');
+    const changelogContent = await fs.readFile(changelogPath, 'utf8');
+    res.type('text/plain').send(changelogContent);
+  } catch (error) {
+    console.error('读取CHANGELOG.md失败:', error);
+    res.status(404).send('更新日志文件未找到');
+  }
+});
 
 
 // 健康检查端点
