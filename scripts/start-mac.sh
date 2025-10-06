@@ -1,7 +1,25 @@
 #!/bin/bash
 
-echo "Starting CoinGlass Monitor (Production Mode)..."
+echo "Starting CoinGlass Monitor (Production Mode with Auto-Restart)..."
 
 cd "$(dirname "$0")/.."
 export NODE_ENV=production
-npm start
+
+while true; do
+    echo ""
+    echo "==================================="
+    echo "  CoinGlass Monitor Starting..."
+    echo "==================================="
+    echo ""
+
+    npm start
+
+    echo ""
+    echo "==================================="
+    echo "  Application stopped or restarted"
+    echo "==================================="
+    echo ""
+
+    echo "Waiting 3 seconds before restart..."
+    sleep 3
+done

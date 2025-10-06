@@ -17,6 +17,7 @@ import cron from 'node-cron';
 import { formatDateTime, formatDateTimeCN } from './utils/time-utils.js';
 import { loggerService } from './services/logger.js';
 import readline from 'readline';
+import zlib from 'zlib';
 
 // 获取当前文件目录
 const __filename = fileURLToPath(import.meta.url);
@@ -746,7 +747,7 @@ function startGitAutoUpdate() {
 }
 
 // ZIP自动更新功能（用于非Git仓库部署）
-function startZipAutoUpdate(gitRepoUrl) {
+async function startZipAutoUpdate(gitRepoUrl) {
   console.log(`📦 ZIP自动更新已启用，仓库: ${gitRepoUrl}`);
 
   // 从Git URL获取GitHub API URL
@@ -754,53 +755,201 @@ function startZipAutoUpdate(gitRepoUrl) {
     .replace('https://github.com/', 'https://api.github.com/repos/')
     .replace(/\.git$/, '');
 
+  // 立即检查一次更新
+  await checkZipUpdate(githubApiUrl);
+
   // 每5分钟检查一次更新
   setInterval(async () => {
-    try {
-      console.log('🔍 检查ZIP更新...');
-
-      // 获取最新release信息
-      const response = await fetch(`${githubApiUrl}/releases/latest`);
-      if (!response.ok) {
-        console.log('⚠️  无法获取release信息，跳过更新检查');
-        return;
-      }
-
-      const releaseData = await response.json();
-      const latestVersion = releaseData.tag_name;
-      const zipUrl = releaseData.zipball_url;
-
-      // 读取当前版本
-      let currentVersion = 'unknown';
-      try {
-        const changelogPath = path.join(__dirname, '..', 'CHANGELOG.md');
-        const changelogContent = await fs.readFile(changelogPath, 'utf8');
-        const changelogData = JSON.parse(changelogContent);
-        if (changelogData && changelogData.length > 0) {
-          currentVersion = changelogData[0].version;
-        }
-      } catch (error) {
-        console.warn('⚠️  无法读取当前版本信息');
-      }
-
-      // 比较版本
-      if (latestVersion !== currentVersion && currentVersion !== 'unknown') {
-        console.log(`🔄 发现新版本: ${latestVersion} (当前: ${currentVersion})`);
-        await performZipUpdate(zipUrl, latestVersion);
-      } else if (currentVersion === 'unknown') {
-        console.log('⚠️  无法确定当前版本，跳过更新');
-      } else {
-        console.log(`✅ 版本已是最新: ${currentVersion}`);
-      }
-
-    } catch (error) {
-      console.log('⚠️  ZIP更新检查失败:', error.message);
-    }
+    await checkZipUpdate(githubApiUrl);
   }, 5 * 60 * 1000); // 5分钟
 }
 
+// 检查ZIP更新
+async function checkZipUpdate(githubApiUrl) {
+  try {
+    console.log('🔍 检查ZIP更新...');
+
+    // 获取最新commit信息
+    const response = await fetch(`${githubApiUrl}/commits/main`);
+    if (!response.ok) {
+      console.log('⚠️  无法获取commit信息，跳过更新检查');
+      return;
+    }
+
+    const commitData = await response.json();
+    const latestCommit = commitData.sha;
+    const commitDate = commitData.commit.committer.date;
+    const zipUrl = `${githubApiUrl}/zipball/main`;
+
+    // 读取当前commit信息
+    let currentCommit = 'unknown';
+    try {
+      const commitInfoPath = path.join(__dirname, '..', 'data', 'current-commit.json');
+      if (await fs.access(commitInfoPath).then(() => true).catch(() => false)) {
+        const commitInfoContent = await fs.readFile(commitInfoPath, 'utf8');
+        const commitInfo = JSON.parse(commitInfoContent);
+        currentCommit = commitInfo.sha;
+      }
+    } catch (error) {
+      console.warn('⚠️  无法读取当前commit信息');
+    }
+
+    // 比较commit
+    if (latestCommit !== currentCommit && currentCommit !== 'unknown') {
+      console.log(`🔄 发现新提交: ${latestCommit.substring(0, 7)} (当前: ${currentCommit.substring(0, 7)})`);
+      console.log(`📅 提交时间: ${new Date(commitDate).toLocaleString('zh-CN')}`);
+      await performZipUpdate(zipUrl, latestCommit, commitDate);
+    } else if (currentCommit === 'unknown') {
+      console.log('⚠️  无法确定当前版本，将直接更新到最新版本');
+      console.log(`📅 最新提交: ${latestCommit.substring(0, 7)} (${new Date(commitDate).toLocaleString('zh-CN')})`);
+      await performZipUpdate(zipUrl, latestCommit, commitDate);
+    } else {
+      console.log(`✅ 代码已是最新: ${latestCommit.substring(0, 7)} (${new Date(commitDate).toLocaleString('zh-CN')})`);
+    }
+
+  } catch (error) {
+    console.log('⚠️  ZIP更新检查失败:', error.message);
+  }
+}
+
+// 保存当前commit信息
+async function saveCurrentCommit(sha, date) {
+  try {
+    const commitInfoPath = path.join(__dirname, '..', 'data', 'current-commit.json');
+    await fs.mkdir(path.dirname(commitInfoPath), { recursive: true });
+    const commitInfo = {
+      sha: sha,
+      date: date,
+      savedAt: new Date().toISOString()
+    };
+    await fs.writeFile(commitInfoPath, JSON.stringify(commitInfo, null, 2));
+    console.log(`✅ 已记录当前commit: ${sha.substring(0, 7)}`);
+  } catch (error) {
+    console.warn('⚠️  保存commit信息失败:', error.message);
+  }
+}
+
+// 自动解压和替换文件
+async function extractAndReplace(zipPath, newCommit, commitDate) {
+  try {
+    const projectRoot = path.join(__dirname, '..');
+    const tempExtractDir = path.join(projectRoot, 'temp-update');
+
+    // 清理之前的临时目录
+    try {
+      await fs.rm(tempExtractDir, { recursive: true, force: true });
+    } catch (error) {
+      // 忽略清理错误
+    }
+
+    // 创建临时解压目录
+    await fs.mkdir(tempExtractDir, { recursive: true });
+
+    console.log('📦 开始解压ZIP文件...');
+
+    // 使用系统命令解压ZIP文件
+    let extractCommand;
+    const platform = os.platform();
+
+    if (platform === 'win32') {
+      // Windows 使用 PowerShell 解压
+      extractCommand = `powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${tempExtractDir}' -Force"`;
+    } else {
+      // macOS/Linux 使用 unzip 命令
+      extractCommand = `unzip -o '${zipPath}' -d '${tempExtractDir}'`;
+    }
+
+    try {
+      execSync(extractCommand, { stdio: 'pipe' });
+      console.log('✅ ZIP文件解压成功');
+    } catch (error) {
+      throw new Error(`解压失败: ${error.message}`);
+    }
+
+    // 查找解压后的项目目录（GitHub的ZIP包含一个以用户名-仓库名-commit命名的根目录）
+    const extractedDirs = await fs.readdir(tempExtractDir);
+    const sourceDir = path.join(tempExtractDir, extractedDirs[0]);
+
+    if (!extractedDirs.length || !(await fs.stat(sourceDir)).isDirectory()) {
+      throw new Error('解压后未找到有效的项目目录');
+    }
+
+    console.log(`📂 找到源目录: ${extractedDirs[0]}`);
+
+    // 备份当前版本
+    const backupDir = path.join(projectRoot, 'backup', `backup-${Date.now()}`);
+    await fs.mkdir(path.dirname(backupDir), { recursive: true });
+
+    console.log('💾 创建当前版本备份...');
+
+    // 复制当前项目到备份目录（排除node_modules和data目录）
+    await copyDirectory(projectRoot, backupDir, ['node_modules', 'data', 'temp-update', 'backup']);
+
+    // 开始替换文件
+    console.log('🔄 开始替换文件...');
+
+    // 复制新版本文件到项目根目录
+    await copyDirectory(sourceDir, projectRoot, []);
+
+    console.log('✅ 文件替换完成');
+    console.log(`🔄 新commit: ${newCommit.substring(0, 7)} (${new Date(commitDate).toLocaleString('zh-CN')})`);
+    console.log(`💾 备份位置: ${backupDir}`);
+    console.log('🚀 更新完成，服务将在5秒后重启...');
+
+    // 清理临时文件
+    try {
+      await fs.rm(tempExtractDir, { recursive: true, force: true });
+    } catch (error) {
+      // 忽略清理错误
+    }
+
+    // 延迟重启以完成当前操作
+    setTimeout(() => {
+      console.log('🔄 重启服务...');
+      process.exit(0); // 进程管理器会自动重启
+    }, 5000);
+
+  } catch (error) {
+    console.error('❌ 自动解压失败:', error.message);
+    console.log('💡 请手动更新或检查网络连接');
+
+    // 清理临时文件
+    try {
+      const tempExtractDir = path.join(__dirname, '..', 'temp-update');
+      await fs.rm(tempExtractDir, { recursive: true, force: true });
+    } catch (error) {
+      // 忽略清理错误
+    }
+  }
+}
+
+// 复制目录函数
+async function copyDirectory(source, target, excludeDirs = []) {
+  const entries = await fs.readdir(source, { withFileTypes: true });
+
+  await fs.mkdir(target, { recursive: true });
+
+  for (const entry of entries) {
+    const sourcePath = path.join(source, entry.name);
+    const targetPath = path.join(target, entry.name);
+
+    // 跳过排除的目录
+    if (entry.isDirectory() && excludeDirs.includes(entry.name)) {
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      // 递归复制子目录
+      await copyDirectory(sourcePath, targetPath, excludeDirs);
+    } else {
+      // 复制文件
+      await fs.copyFile(sourcePath, targetPath);
+    }
+  }
+}
+
 // 执行ZIP更新
-async function performZipUpdate(zipUrl, newVersion) {
+async function performZipUpdate(zipUrl, newCommit, commitDate) {
   try {
     console.log('🔄 开始ZIP更新...');
 
@@ -827,13 +976,13 @@ async function performZipUpdate(zipUrl, newVersion) {
     const buffer = await zipResponse.arrayBuffer();
     await fs.writeFile(tempZipPath, Buffer.from(buffer));
 
-    console.log('✅ ZIP下载完成，准备解压...');
+    console.log('✅ ZIP下载完成，准备自动解压...');
 
-    // 这里需要解压和替换文件的逻辑
-    // 由于Node.js原生不支持解压，这里提供简化版本
-    console.log('⚠️  自动解压功能需要额外依赖，请手动更新');
-    console.log(`📥 下载链接: ${zipUrl}`);
-    console.log(`🔄 新版本: ${newVersion}`);
+    // 自动解压和替换文件
+    await extractAndReplace(tempZipPath, newCommit, commitDate);
+
+    // 更新当前commit信息
+    await saveCurrentCommit(newCommit, commitDate);
 
     // 清理临时文件
     try {
