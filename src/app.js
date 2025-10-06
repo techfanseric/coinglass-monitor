@@ -13,6 +13,9 @@ import { fileURLToPath } from 'url';
 import os from 'os';
 import { createConnection } from 'net';
 import { spawn, execSync } from 'child_process';
+import cron from 'node-cron';
+import { formatDateTime, formatDateTimeCN } from './utils/time-utils.js';
+import { loggerService } from './services/logger.js';
 import readline from 'readline';
 
 // 获取当前文件目录
@@ -23,10 +26,7 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
 const envPath = path.join(projectRoot, '.env');
 
-// 设置日志文件路径
-const logFilePath = process.env.LOGS_DIR ?
-  path.join(process.env.LOGS_DIR, 'server.log') :
-  path.join(projectRoot, 'logs', 'server.log');
+// 日志文件现在由LoggerService统一管理
 
 try {
   dotenv.config({ path: envPath });
@@ -323,21 +323,10 @@ console.log = function(...args) {
   // 调用原始console.log
   originalConsoleLog.apply(console, args);
 
-  // 写入到日志文件
+  // 写入到LoggerService
   try {
-    const timestamp = new Date().toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).replace(/\//g, '-');
     const logMessage = args.join(' ');
-    const logLine = `[${timestamp}] ${logMessage}\n`;
-
-    fsSync.appendFileSync(logFilePath, logLine);
+    loggerService.info(logMessage);
   } catch (error) {
     originalConsoleError('写入日志失败:', error.message);
   }
@@ -347,21 +336,10 @@ console.error = function(...args) {
   // 调用原始console.error
   originalConsoleError.apply(console, args);
 
-  // 写入到日志文件
+  // 写入到LoggerService
   try {
-    const timestamp = new Date().toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).replace(/\//g, '-');
     const logMessage = args.join(' ');
-    const logLine = `[${timestamp}] ERROR: ${logMessage}\n`;
-
-    fsSync.appendFileSync(logFilePath, logLine);
+    loggerService.error(logMessage);
   } catch (error) {
     originalConsoleError('写入日志失败:', error.message);
   }
@@ -371,21 +349,10 @@ console.warn = function(...args) {
   // 调用原始console.warn
   originalConsoleWarn.apply(console, args);
 
-  // 写入到日志文件
+  // 写入到LoggerService
   try {
-    const timestamp = new Date().toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).replace(/\//g, '-');
     const logMessage = args.join(' ');
-    const logLine = `[${timestamp}] WARN: ${logMessage}\n`;
-
-    fsSync.appendFileSync(logFilePath, logLine);
+    loggerService.warn(logMessage);
   } catch (error) {
     originalConsoleError('写入日志失败:', error.message);
   }
@@ -403,24 +370,15 @@ app.use((req, res, next) => {
     return next();
   }
 
-  const timestamp = new Date().toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).replace(/\//g, '-');
+  const timestamp = formatDateTime(new Date());
   const logMessage = `${timestamp} - ${req.method} ${req.url}\n`;
 
   // 输出到控制台
   console.log(`📡 ${logMessage.trim()}`);
 
-  // 写入到日志文件
+  // 写入到LoggerService
   try {
-    const logPath = logFilePath;
-    fsSync.appendFileSync(logPath, logMessage);
+    loggerService.info(logMessage.trim());
   } catch (error) {
     console.error('写入日志失败:', error.message);
   }
@@ -446,15 +404,7 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    timestamp: new Date().toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).replace(/\//g, '-'),
+    timestamp: formatDateTime(new Date()),
     platform: platform,
     environment: NODE_ENV,
     version: '1.0.0',
@@ -499,7 +449,7 @@ app.use((req, res) => {
     error: '接口未找到',
     path: req.url,
     method: req.method,
-    timestamp: new Date().toISOString()
+    timestamp: formatDateTime(new Date())
   });
 });
 
@@ -510,15 +460,7 @@ app.use((error, req, res, next) => {
   res.status(error.status || 500).json({
     error: '服务器内部错误',
     message: NODE_ENV === 'development' ? error.message : '请联系管理员',
-    timestamp: new Date().toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).replace(/\//g, '-'),
+    timestamp: formatDateTime(new Date()),
     path: req.url
   });
 });
@@ -552,27 +494,65 @@ async function startMonitoringService() {
   }
 }
 
-// 启动日志清理定时任务
-function startLogCleanup() {
-  // 每天凌晨2点执行清理
-  setInterval(async () => {
+// 启动数据清理定时任务
+function startDataCleanup() {
+  // 每天凌晨2点执行清理 - 使用cron确保准时执行
+  const cleanupTask = cron.schedule('0 2 * * *', async () => {
     try {
-      const { loggerService } = await import('./services/logger.js');
-      await loggerService.cleanupOldLogs();
-    } catch (error) {
-      console.error('❌ 定时清理日志失败:', error);
-    }
-  }, 24 * 60 * 60 * 1000); // 24小时
+      const { dataCleanupService } = await import('./services/data-cleanup.js');
 
-  // 立即执行一次清理
+      console.log('🧹 开始执行每日定时数据清理...');
+      const now = new Date();
+      console.log(`⏰ 执行时间: ${formatDateTime(now)}`);
+
+      // 使用统一的数据清理服务清理所有目录
+      const cleanupResult = await dataCleanupService.cleanupAll();
+
+      if (cleanupResult.success) {
+        console.log(`✅ 定时数据清理任务完成: 删除 ${cleanupResult.totalCleaned} 个文件，释放 ${(cleanupResult.totalSize / 1024 / 1024).toFixed(2)}MB`);
+      } else {
+        console.log('⚠️ 定时数据清理部分完成，存在一些错误');
+      }
+
+      // 输出详细的清理结果（如果启用详细日志）
+      if (process.env.DETAILED_CLEANUP_LOGGING === 'true') {
+        cleanupResult.directories.forEach(dir => {
+          if (dir.cleanedCount > 0) {
+            console.log(`  📁 ${dir.directory}: 删除 ${dir.cleanedCount} 个文件`);
+          }
+        });
+      }
+    } catch (error) {
+      console.error('❌ 定时数据清理失败:', error);
+    }
+  }, {
+    scheduled: true,
+    timezone: 'Asia/Shanghai' // 使用中国时区
+  });
+
+  console.log('✅ 已启动定时清理任务 - 每天凌晨2点执行');
+
+  // 立即执行一次清理（1分钟后）
   setTimeout(async () => {
     try {
-      const { loggerService } = await import('./services/logger.js');
-      await loggerService.cleanupOldLogs();
+      const { dataCleanupService } = await import('./services/data-cleanup.js');
+
+      console.log('🧹 执行启动时数据清理...');
+
+      // 使用统一的数据清理服务清理所有目录
+      const cleanupResult = await dataCleanupService.cleanupAll();
+
+      if (cleanupResult.success) {
+        console.log(`✅ 启动时数据清理完成: 删除 ${cleanupResult.totalCleaned} 个文件，释放 ${(cleanupResult.totalSize / 1024 / 1024).toFixed(2)}MB`);
+      } else {
+        console.log('⚠️ 启动时数据清理部分完成，存在一些错误');
+      }
     } catch (error) {
-      console.error('❌ 初始清理日志失败:', error);
+      console.error('❌ 启动时数据清理失败:', error);
     }
   }, 60 * 1000); // 1分钟后执行
+
+  return cleanupTask;
 }
 
 // Git自动更新（仅在脚本启动模式下明确启用）
@@ -616,12 +596,16 @@ function startGitAutoUpdate() {
         if (local !== remote) {
           console.log('🔄 发现新版本，开始更新...');
 
-          // 备份状态
+          // 创建完整备份（配置和状态）
           try {
-            const statePath = path.join(process.env.DATA_DIR || './data', 'state.json');
-            const backupPath = path.join(process.env.DATA_DIR || './data', 'state.json.backup');
-            await fs.copyFile(statePath, backupPath);
-          } catch {}
+            const { storageService } = await import('./services/storage.js');
+            const backupPath = await storageService.backup();
+            if (backupPath) {
+              console.log(`✅ 更新前备份已创建: ${backupPath}`);
+            }
+          } catch (error) {
+            console.warn('⚠️  更新前备份失败:', error.message);
+          }
 
           // 拉取更新
           const pullResult = spawn('git', ['pull'], { stdio: 'inherit' });
@@ -651,8 +635,8 @@ async function startServer() {
     // 端口占用检查
     await handlePortOccupancy();
 
-    // 启动日志清理任务
-    startLogCleanup();
+    // 启动数据清理任务
+    startDataCleanup();
 
     // 启动监控服务
     await startMonitoringService();
@@ -669,8 +653,8 @@ async function startServer() {
       console.log(`💻 平台: ${platform} | 🔧 环境: ${NODE_ENV}`);
       console.log(`📁 数据目录: ${process.env.DATA_DIR || './data'} | 📋 日志目录: ${process.env.LOGS_DIR || './logs'}`);
       console.log('=====================================');
-      console.log(`⏰ 启动时间: ${new Date().toLocaleString()}`);
-      console.log('🗑️ 日志清理: 每天凌晨2点自动清理7天前的日志');
+      console.log(`⏰ 启动时间: ${formatDateTimeCN(new Date())}`);
+      console.log('🗑️ 数据清理: 每天凌晨2点自动清理7天前的所有历史数据（日志、邮件、截图、备份等）');
       });
 
   } catch (error) {

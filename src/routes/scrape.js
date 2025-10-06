@@ -5,6 +5,7 @@
 
 import express from 'express';
 import { storageService } from '../services/storage.js';
+import { formatDateTime } from '../utils/time-utils.js';
 
 const router = express.Router();
 
@@ -24,7 +25,7 @@ router.post('/coinglass', async (req, res) => {
       return res.status(400).json({
         success: false,
         error: '缺少必要参数: exchange 和 coin',
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     }
 
@@ -34,7 +35,7 @@ router.post('/coinglass', async (req, res) => {
       return res.status(400).json({
         success: false,
         error: '监控未启用，请先启用监控功能',
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     }
 
@@ -42,7 +43,7 @@ router.post('/coinglass', async (req, res) => {
       return res.status(400).json({
         success: false,
         error: '未配置通知邮箱，请先配置邮箱',
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     }
 
@@ -73,17 +74,43 @@ router.post('/coinglass', async (req, res) => {
           [coin.symbol]                 // 只抓取当前币种
         );
 
-        if (coinData && coinData.coins && coinData.coins[coin.symbol]) {
-          // 合并到总数据中
-          allCoinsData[coin.symbol] = coinData.coins[coin.symbol];
-          console.log(`✅ ${coin.symbol} 数据抓取成功，利率: ${coinData.coins[coin.symbol].annual_rate}%`);
+        // 检查数据是否存在 - 支持简单键和复合键查找
+        let foundCoinData = null;
+        if (coinData && coinData.coins) {
+          // 优先尝试简单键匹配
+          foundCoinData = coinData.coins[coin.symbol];
+
+          // 如果简单键找不到，检查是否已经有复合键数据
+          if (!foundCoinData) {
+            const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+            foundCoinData = coinData.coins[coinKey] || coinData.coins[coin.symbol];
+          }
+        }
+
+        if (foundCoinData) {
+          // 使用复合键存储，避免重复币种覆盖
+          const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+
+          // 为重复币种创建唯一标识的数据副本
+          const coinDataWithMeta = {
+            ...foundCoinData,
+            exchange: coin.exchange,
+            timeframe: coin.timeframe,
+            coin_key: coinKey,
+            symbol_display: `${coin.symbol} (${coin.timeframe === '24h' ? '24小时' : coin.timeframe})`
+          };
+
+          // 使用复合键存储独立的数据副本
+          allCoinsData[coinKey] = coinDataWithMeta;
+
+          console.log(`✅ ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据抓取成功，利率: ${foundCoinData.annual_rate}%`);
 
           scrapingSummary.push({
             symbol: coin.symbol,
             exchange: coin.exchange,
             timeframe: coin.timeframe,
             success: true,
-            rate: coinData.coins[coin.symbol].annual_rate
+            rate: foundCoinData.annual_rate
           });
         } else {
           console.warn(`⚠️ ${coin.symbol} 数据抓取失败`);
@@ -118,7 +145,7 @@ router.post('/coinglass', async (req, res) => {
     // 构建统一的返回数据结构
     const data = {
       exchange: 'mixed', // 表示混合配置
-      timestamp: new Date().toISOString(),
+      timestamp: formatDateTime(new Date()),
       coins: allCoinsData,
       source: 'multi_exchange_manual_scraping',
       scraping_info: {
@@ -134,6 +161,11 @@ router.post('/coinglass', async (req, res) => {
       throw new Error('所有币种数据抓取失败');
     }
 
+    console.log(`📊 抓取结果统计: 成功 ${Object.keys(allCoinsData).length}/${enabledCoins.length} 个币种`);
+    if (Object.keys(allCoinsData).length < enabledCoins.length) {
+      console.log(`⚠️  部分币种抓取失败，但继续处理已成功抓取的币种`);
+    }
+
     console.log(`✅ 多币种数据抓取完成，成功获取 ${Object.keys(allCoinsData).length} 个币种数据，耗时: ${duration}ms`);
     console.log('📊 抓取摘要:', scrapingSummary.map(r => `${r.symbol}(${r.exchange}/${r.timeframe}):${r.success?'✅':'❌'}`).join(', '));
 
@@ -143,7 +175,7 @@ router.post('/coinglass', async (req, res) => {
       coin: enabledCoins.map(c => c.symbol).join(','),
       timeframe: 'mixed',
       data,
-      timestamp: new Date().toISOString(),
+      timestamp: formatDateTime(new Date()),
       duration,
       manual: true,
       scraping_summary: scrapingSummary
@@ -160,7 +192,7 @@ router.post('/coinglass', async (req, res) => {
       data: data,
       monitor_results: monitorResults,
       meta: {
-        timestamp: new Date().toISOString(),
+        timestamp: formatDateTime(new Date()),
         duration: duration,
         source: 'coinglass_multi_exchange',
         triggered_by: 'manual',
@@ -179,7 +211,7 @@ router.post('/coinglass', async (req, res) => {
       error: '监控触发失败',
       message: error.message,
       meta: {
-        timestamp: new Date().toISOString(),
+        timestamp: formatDateTime(new Date()),
         triggered_by: 'manual'
       }
     });
@@ -206,10 +238,11 @@ async function runCompleteMonitorCheck(rateData, config) {
     const triggeredCoins = []; // 收集所有触发警报的币种
 
     for (const coin of config.coins.filter(c => c.enabled)) {
-      console.log(`🔍 处理币种: ${coin.symbol}`);
+      console.log(`🔍 处理币种: ${coin.symbol} (${coin.exchange}/${coin.timeframe})`);
 
-      const coinResult = await checkCoinThresholdComplete(coin, rateData, config, true); // 手动触发标识
-      results.coins_checked++;
+      try {
+        const coinResult = await checkCoinThresholdComplete(coin, rateData, config, true); // 手动触发标识
+        results.coins_checked++;
 
       // 收集触发警报的币种，但不立即发送邮件
       if (coinResult.alert_sent) {
@@ -227,6 +260,20 @@ async function runCompleteMonitorCheck(rateData, config) {
       results.recoveries_sent += coinResult.recovery_sent ? 1 : 0;
       results.notifications_skipped += coinResult.skipped ? 1 : 0;
       results.details.push(coinResult);
+
+      } catch (coinError) {
+        console.error(`❌ 处理币种 ${coin.symbol} 时出错:`, coinError.message);
+        results.details.push({
+          symbol: coin.symbol,
+          threshold: coin.threshold,
+          current_rate: null,
+          alert_sent: false,
+          recovery_sent: false,
+          skipped: true,
+          reason: `处理出错: ${coinError.message}`,
+          error: coinError.message
+        });
+      }
     }
 
     // 发送多币种警报邮件
@@ -270,13 +317,26 @@ async function checkCoinThresholdComplete(coin, rateData, config, isManualTrigge
   };
 
   try {
-    // 获取当前利率
-    const currentRate = rateData.coins[coin.symbol]?.annual_rate;
+    // 优先使用复合键查找数据
+    const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+    let coinData = rateData.coins[coinKey];
+
+    // 如果复合键找不到，回退到简单键查找（向后兼容）
+    if (!coinData) {
+      coinData = rateData.coins[coin.symbol];
+      console.log(`⚠️  复合键 ${coinKey} 未找到，使用简单键 ${coin.symbol} 查找`);
+    }
+
+    const currentRate = coinData?.annual_rate;
     if (!currentRate) {
-      result.reason = `币种 ${coin.symbol} 数据不存在`;
+      console.log(`❌ 币种 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据不存在`);
+      console.log(`🔍 可用的数据键: ${Object.keys(rateData.coins).join(', ')}`);
+      result.reason = `币种 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据不存在`;
       result.skipped = true;
       return result;
     }
+
+    console.log(`✅ 找到币种数据: ${coin.symbol} (${coin.exchange}/${coin.timeframe}) -> 利率 ${currentRate}%`);
 
     result.current_rate = currentRate;
 
@@ -322,17 +382,17 @@ async function checkCoinThresholdComplete(coin, rateData, config, isManualTrigge
           if (isManualTrigger) {
             // 手动触发更新状态，但设置较短的特殊冷却期
             await storageService.updateCoinState(coin.symbol, 'alert', {
-              last_notification: now.toISOString(),
-              next_notification: new Date(now.getTime() + 30 * 60 * 1000).toISOString(), // 手动触发30分钟冷却期
+              last_notification: formatDateTime(now),
+              next_notification: formatDateTime(new Date(now.getTime() + 30 * 60 * 1000)), // 手动触发30分钟冷却期
               last_rate: currentRate,
               trigger_type: 'manual',
-              manual_trigger_at: now.toISOString()
+              manual_trigger_at: formatDateTime(now)
             });
           } else {
             // 自动触发的正常状态更新
             await storageService.updateCoinState(coin.symbol, 'alert', {
-              last_notification: now.toISOString(),
-              next_notification: new Date(now.getTime() + config.repeat_interval * 60 * 1000).toISOString(), // 改为分钟
+              last_notification: formatDateTime(now),
+              next_notification: formatDateTime(new Date(now.getTime() + config.repeat_interval * 60 * 1000)), // 改为分钟
               last_rate: currentRate,
               trigger_type: 'auto'
             });
@@ -366,7 +426,7 @@ async function checkCoinThresholdComplete(coin, rateData, config, isManualTrigge
           await storageService.updateCoinState(coin.symbol, 'normal', {
             last_rate: currentRate,
             trigger_type: isManualTrigger ? 'manual' : 'auto',
-            recovered_at: now.toISOString()
+            recovered_at: formatDateTime(now)
           });
         } else {
           result.skipped = true;
@@ -387,21 +447,65 @@ async function checkCoinThresholdComplete(coin, rateData, config, isManualTrigge
 }
 
 /**
- * 检查是否在通知时间段内
+ * 解析时间字符串为分钟数，支持验证和错误处理
+ */
+function parseTime(timeStr) {
+  if (!timeStr || typeof timeStr !== 'string') {
+    return null;
+  }
+
+  const parts = timeStr.split(':');
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  const hours = Number(parts[0]);
+  const minutes = Number(parts[1]);
+
+  // 验证时间格式有效性
+  if (isNaN(hours) || isNaN(minutes) ||
+      hours < 0 || hours > 23 ||
+      minutes < 0 || minutes > 59) {
+    return null;
+  }
+
+  return hours * 60 + minutes;
+}
+
+/**
+ * 检查是否在通知时间段内，支持跨天逻辑和配置验证
  */
 function isWithinNotificationHours(config) {
   if (!config.notification_hours || !config.notification_hours.enabled) {
     return true; // 如果没有启用时间限制，则始终允许
   }
 
+  // 验证时间配置完整性
+  if (!config.notification_hours.start || !config.notification_hours.end) {
+    console.warn('⚠️ notification_hours 配置不完整，自动禁用时间限制');
+    return true; // 配置不完整时回退到无限制状态
+  }
+
   const now = new Date();
   const currentTime = now.getHours() * 60 + now.getMinutes();
-  const [startHour, startMin] = config.notification_hours.start.split(':').map(Number);
-  const [endHour, endMin] = config.notification_hours.end.split(':').map(Number);
-  const startTime = startHour * 60 + startMin;
-  const endTime = endHour * 60 + endMin;
 
-  return currentTime >= startTime && currentTime <= endTime;
+  const startTime = parseTime(config.notification_hours.start);
+  const endTime = parseTime(config.notification_hours.end);
+
+  // 验证时间格式有效性
+  if (startTime === null || endTime === null) {
+    console.warn('⚠️ notification_hours 时间格式无效，自动禁用时间限制');
+    return true; // 时间格式无效时回退到无限制状态
+  }
+
+  // 支持跨天时间段（例如 20:00-06:00）
+  if (startTime <= endTime) {
+    // 正常时间段，如 09:00-18:00
+    return currentTime >= startTime && currentTime < endTime;
+  } else {
+    // 跨天时间段，如 20:00-06:00
+    return currentTime >= startTime || currentTime < endTime;
+  }
 }
 
 /**
@@ -420,7 +524,7 @@ router.get('/latest', async (req, res) => {
       res.json({
         success: true,
         data: latestResult,
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     } else {
       console.log('⚠️  没有找到抓取结果');
@@ -428,7 +532,7 @@ router.get('/latest', async (req, res) => {
         success: false,
         message: '没有找到抓取结果',
         suggestion: '请先进行一次抓取操作',
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     }
 
@@ -438,7 +542,7 @@ router.get('/latest', async (req, res) => {
       success: false,
       error: '获取最新抓取结果失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -462,7 +566,7 @@ router.get('/history', async (req, res) => {
       total_count: history.length,
       limit: limitNum,
       filters: { exchange, coin },
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
 
   } catch (error) {
@@ -471,7 +575,7 @@ router.get('/history', async (req, res) => {
       success: false,
       error: '获取抓取历史失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -492,7 +596,7 @@ router.get('/status', async (req, res) => {
     res.json({
       success: true,
       status,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
 
   } catch (error) {
@@ -501,7 +605,7 @@ router.get('/status', async (req, res) => {
       success: false,
       error: '获取抓取服务状态失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -521,7 +625,7 @@ router.post('/test', async (req, res) => {
       chrome_accessible: true,
       network_status: 'ok',
       coinglass_accessible: true,
-      test_timestamp: new Date().toISOString()
+      test_timestamp: formatDateTime(new Date())
     };
 
     console.log('✅ 抓取服务测试完成');
@@ -529,7 +633,7 @@ router.post('/test', async (req, res) => {
       success: true,
       test_result: testResult,
       message: '抓取服务测试通过',
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
 
   } catch (error) {
@@ -538,7 +642,7 @@ router.post('/test', async (req, res) => {
       success: false,
       error: '抓取服务测试失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -556,7 +660,7 @@ router.post('/test-email', async (req, res) => {
       return res.status(400).json({
         success: false,
         error: '缺少必要参数: email',
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     }
 
@@ -566,7 +670,7 @@ router.post('/test-email', async (req, res) => {
       return res.status(400).json({
         success: false,
         error: '邮箱格式不正确',
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     }
 
@@ -579,7 +683,7 @@ router.post('/test-email', async (req, res) => {
         success: true,
         message: '测试邮件发送成功',
         email: email,
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     } else {
       throw new Error('测试邮件发送失败');
@@ -591,7 +695,7 @@ router.post('/test-email', async (req, res) => {
       success: false,
       error: '测试邮件发送失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });

@@ -5,8 +5,84 @@
 
 import express from 'express';
 import { storageService } from '../services/storage.js';
+import { formatDateTime } from '../utils/time-utils.js';
 
 const router = express.Router();
+
+/**
+ * 验证时间字符串格式
+ */
+function validateTimeFormat(timeStr) {
+  if (!timeStr || typeof timeStr !== 'string') {
+    return false;
+  }
+
+  const parts = timeStr.split(':');
+  if (parts.length !== 2) {
+    return false;
+  }
+
+  const hours = Number(parts[0]);
+  const minutes = Number(parts[1]);
+
+  return !isNaN(hours) && !isNaN(minutes) &&
+         hours >= 0 && hours <= 23 &&
+         minutes >= 0 && minutes <= 59;
+}
+
+/**
+ * 验证并修复 notification_hours 配置
+ */
+function validateNotificationHours(notificationHours) {
+  if (!notificationHours || typeof notificationHours !== 'object') {
+    return {
+      enabled: false,
+      start: '09:00',
+      end: '23:59'
+    };
+  }
+
+  const enabled = Boolean(notificationHours.enabled);
+
+  // 如果未启用，返回默认值
+  if (!enabled) {
+    return {
+      enabled: false,
+      start: '09:00',
+      end: '23:59'
+    };
+  }
+
+  // 验证时间格式
+  const startValid = validateTimeFormat(notificationHours.start);
+  const endValid = validateTimeFormat(notificationHours.end);
+
+  // 如果时间格式无效，自动禁用并返回默认值
+  if (!startValid || !endValid) {
+    console.warn('⚠️ notification_hours 时间格式无效，自动禁用时间限制');
+    return {
+      enabled: false,
+      start: '09:00',
+      end: '23:59'
+    };
+  }
+
+  // 验证配置完整性
+  if (!notificationHours.start || !notificationHours.end) {
+    console.warn('⚠️ notification_hours 配置不完整，自动禁用时间限制');
+    return {
+      enabled: false,
+      start: '09:00',
+      end: '23:59'
+    };
+  }
+
+  return {
+    enabled: true,
+    start: notificationHours.start,
+    end: notificationHours.end
+  };
+}
 
 /**
  * GET /api/config - 获取用户配置
@@ -29,7 +105,7 @@ router.get('/', async (req, res) => {
     res.status(500).json({
       error: '获取配置失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -48,7 +124,7 @@ router.post('/', async (req, res) => {
     if (!config || typeof config !== 'object') {
       return res.status(400).json({
         error: '配置格式无效',
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     }
 
@@ -81,12 +157,7 @@ router.post('/', async (req, res) => {
         daily_minute: Number(config.trigger_settings?.daily_minute) || 0,
         ...config.trigger_settings
       },
-      notification_hours: {
-        enabled: Boolean(config.notification_hours?.enabled),
-        start: config.notification_hours?.start || '09:00',
-        end: config.notification_hours?.end || '24:00',
-        ...config.notification_hours
-      },
+      notification_hours: validateNotificationHours(config.notification_hours),
       repeat_interval: Number(config.repeat_interval) || 180, // 修复默认值
       // 不再使用 ...config 避免覆盖验证逻辑
     };
@@ -98,7 +169,7 @@ router.post('/', async (req, res) => {
       res.json({
         success: true,
         message: '配置保存成功',
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     } else {
       throw new Error('配置保存失败');
@@ -109,7 +180,7 @@ router.post('/', async (req, res) => {
     res.status(500).json({
       error: '保存配置失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -128,7 +199,7 @@ router.get('/default', (req, res) => {
     res.status(500).json({
       error: '获取默认配置失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -148,7 +219,7 @@ router.post('/backup', async (req, res) => {
         success: true,
         message: '配置备份成功',
         backup_path: backupPath,
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     } else {
       throw new Error('备份失败');
@@ -159,7 +230,7 @@ router.post('/backup', async (req, res) => {
     res.status(500).json({
       error: '配置备份失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -180,7 +251,7 @@ router.post('/reset', async (req, res) => {
         success: true,
         message: '配置重置成功',
         config: defaultConfig,
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     } else {
       throw new Error('重置失败');
@@ -191,7 +262,7 @@ router.post('/reset', async (req, res) => {
     res.status(500).json({
       error: '配置重置失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });

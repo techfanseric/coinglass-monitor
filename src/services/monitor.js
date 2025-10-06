@@ -3,6 +3,8 @@
  * 后续会迁移完整的监控逻辑
  */
 
+import { formatDateTime } from '../utils/time-utils.js';
+
 export class MonitorService {
   constructor() {
     this.isRunning = false;
@@ -21,7 +23,7 @@ export class MonitorService {
   getStatus() {
     return {
       running: this.isRunning,
-      last_check: new Date().toISOString()
+      last_check: formatDateTime(new Date())
     };
   }
 }

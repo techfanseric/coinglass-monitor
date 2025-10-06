@@ -157,6 +157,15 @@
 
         // 保存配置
         async function saveConfig(inputConfig = null) {
+            // 验证时间配置
+            if (!validateTimeConfig()) {
+                return; // 验证失败时中止保存
+            }
+
+            const timeControl = document.getElementById('timeControl');
+            const startTime = document.getElementById('startTime').value;
+            const endTime = document.getElementById('endTime').value;
+
             const config = inputConfig || {
                 email: document.getElementById('email').value,
                 repeat_interval: parseInt(document.getElementById('repeatInterval').value),
@@ -166,9 +175,9 @@
                     daily_time: document.getElementById('dailyTime').value || '09:05'
                 },
                 notification_hours: {
-                    enabled: document.getElementById('timeControl').checked,
-                    start: document.getElementById('startTime').value,
-                    end: document.getElementById('endTime').value
+                    enabled: timeControl.checked,
+                    start: startTime,
+                    end: endTime
                 },
                 coins: currentConfig?.coins || [] // 保持现有的监控配置
             };
@@ -446,6 +455,83 @@
             }
         }
 
+        // 验证时间字符串格式
+        function validateTimeFormat(timeStr) {
+            if (!timeStr || typeof timeStr !== 'string') {
+                return false;
+            }
+
+            const parts = timeStr.split(':');
+            if (parts.length !== 2) {
+                return false;
+            }
+
+            const hours = Number(parts[0]);
+            const minutes = Number(parts[1]);
+
+            return !isNaN(hours) && !isNaN(minutes) &&
+                   hours >= 0 && hours <= 23 &&
+                   minutes >= 0 && minutes <= 59;
+        }
+
+        // 验证并修复时间配置
+        function validateTimeConfig() {
+            const timeControl = document.getElementById('timeControl');
+            const startTime = document.getElementById('startTime').value;
+            const endTime = document.getElementById('endTime').value;
+
+            // 如果未启用时间限制，无需验证
+            if (!timeControl.checked) {
+                return true;
+            }
+
+            const startValid = validateTimeFormat(startTime);
+            const endValid = validateTimeFormat(endTime);
+
+            if (!startValid || !endValid) {
+                // 时间格式无效，自动取消勾选
+                timeControl.checked = false;
+                toggleTimeInputs();
+                showAlert('时间格式无效，已自动取消时间限制', 'warning');
+                return false;
+            }
+
+            return true;
+        }
+
+        // 时间输入变化时的实时验证
+        function onTimeInputChange() {
+            const timeControl = document.getElementById('timeControl');
+
+            // 如果未启用，无需验证
+            if (!timeControl.checked) {
+                return;
+            }
+
+            const startTime = document.getElementById('startTime').value;
+            const endTime = document.getElementById('endTime').value;
+            const startValid = validateTimeFormat(startTime);
+            const endValid = validateTimeFormat(endTime);
+
+            if (!startValid || !endValid) {
+                // 显示错误提示，但不立即取消勾选
+                const timeInputs = document.getElementById('timeInputs');
+                if (!document.getElementById('timeErrorTip')) {
+                    const errorTip = document.createElement('div');
+                    errorTip.id = 'timeErrorTip';
+                    errorTip.style.cssText = 'color: #dc3545; font-size: 12px; margin-top: 5px;';
+                    errorTip.textContent = '⚠️ 时间格式无效，保存时将自动取消时间限制';
+                    timeInputs.appendChild(errorTip);
+                }
+            } else {
+                // 移除错误提示
+                const errorTip = document.getElementById('timeErrorTip');
+                if (errorTip) {
+                    errorTip.remove();
+                }
+            }
+        }
+
         // 检查监控状态是否可以开启
         function canEnableMonitoring() {
             const email = document.getElementById('email').value.trim();
@@ -576,6 +662,15 @@
 
         // 自动保存配置
         async function autoSaveConfig() {
+            // 验证时间配置
+            if (!validateTimeConfig()) {
+                return; // 验证失败时中止保存
+            }
+
+            const timeControl = document.getElementById('timeControl');
+            const startTime = document.getElementById('startTime').value;
+            const endTime = document.getElementById('endTime').value;
+
             const config = {
                 email: document.getElementById('email').value,
                 repeat_interval: parseInt(document.getElementById('repeatInterval').value),
@@ -585,9 +680,9 @@
                     daily_time: document.getElementById('dailyTime').value || '09:05'
                 },
                 notification_hours: {
-                    enabled: document.getElementById('timeControl').checked,
-                    start: document.getElementById('startTime').value,
-                    end: document.getElementById('endTime').value
+                    enabled: timeControl.checked,
+                    start: startTime,
+                    end: endTime
                 },
                 coins: currentConfig?.coins || []
             };

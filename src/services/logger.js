@@ -14,9 +14,8 @@ export class LoggerService {
     // 支持环境变量配置日志目录，默认使用项目根目录下的logs文件夹
     const projectRoot = path.join(__dirname, '../..');
     this.logDir = process.env.LOGS_DIR || path.join(projectRoot, 'logs');
-    this.systemLogFile = path.join(this.logDir, 'system.log');
-    // 用于Web界面读取的server.log路径
-    this.serverLogFile = process.env.LOGS_DIR ?
+    // 统一使用server.log作为唯一日志文件
+    this.logFile = process.env.LOGS_DIR ?
       path.join(process.env.LOGS_DIR, 'server.log') :
       path.join(projectRoot, 'logs', 'server.log');
 
@@ -48,17 +47,30 @@ export class LoggerService {
       const retentionDays = this.config.retentionDays;
       const cutoffDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
 
-      // 清理系统日志文件
-      if (fs.existsSync(this.systemLogFile)) {
-        const content = fs.readFileSync(this.systemLogFile, 'utf8');
+      // 清理日志文件
+      if (fs.existsSync(this.logFile)) {
+        const content = fs.readFileSync(this.logFile, 'utf8');
         const lines = content.split('\n').filter(line => line.trim());
 
         const filteredLines = lines.filter(line => {
           try {
-            // 解析时间戳 [2025-10-05T05:46:26.000Z]
+            // 解析时间戳 [2025-10-05 05:46:26] 或 [2025-10-05T05:46:26.000Z]
             const timestampMatch = line.match(/^\[([^\]]+)\]/);
             if (timestampMatch) {
-              const logTimestamp = new Date(timestampMatch[1]);
+              const timestampStr = timestampMatch[1];
+              let logTimestamp;
+
+              // 尝试解析新格式 YYYY-MM-DD HH:mm:ss
+              if (timestampStr.match(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)) {
+                const [datePart, timePart] = timestampStr.split(' ');
+                const [year, month, day] = datePart.split('-');
+                const [hour, minute, second] = timePart.split(':');
+                logTimestamp = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`);
+              } else {
+                // 尝试解析ISO格式
+                logTimestamp = new Date(timestampStr);
+              }
+
               return logTimestamp > cutoffDate;
             }
             return false;
@@ -68,34 +80,8 @@ export class LoggerService {
         });
 
         if (filteredLines.length < lines.length) {
-          fs.writeFileSync(this.systemLogFile, filteredLines.join('\n'));
-          console.log(`🗑️ 清理了 ${lines.length - filteredLines.length} 行${retentionDays}天前的系统日志`);
-        }
-      }
-
-      // 清理服务器日志文件
-      const serverLogFile = this.serverLogFile;
-      if (fs.existsSync(serverLogFile)) {
-        const content = fs.readFileSync(serverLogFile, 'utf8');
-        const lines = content.split('\n').filter(line => line.trim());
-
-        const filteredLines = lines.filter(line => {
-          try {
-            // 解析时间戳格式类似: 2025-10-05T05:46:26.000Z
-            const timestampMatch = line.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)/);
-            if (timestampMatch) {
-              const logTimestamp = new Date(timestampMatch[1]);
-              return logTimestamp > cutoffDate;
-            }
-            return false;
-          } catch (error) {
-            return false; // 如果时间戳解析失败，丢弃该行
-          }
-        });
-
-        if (filteredLines.length < lines.length) {
-          fs.writeFileSync(serverLogFile, filteredLines.join('\n'));
-          console.log(`🗑️ 清理了 ${lines.length - filteredLines.length} 行${retentionDays}天前的服务器日志`);
+          fs.writeFileSync(this.logFile, filteredLines.join('\n'));
+          console.log(`🗑️ 清理了 ${lines.length - filteredLines.length} 行${retentionDays}天前的日志`);
         }
       }
 
@@ -150,15 +136,16 @@ export class LoggerService {
    * 写入系统日志
    */
   writeLog(level, message, meta = {}) {
-    const timestamp = new Date().toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).replace(/\//g, '-');
+    // 使用易读的时间戳格式 YYYY-MM-DD HH:mm:ss
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+
+    const timestamp = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
     const logEntry = {
       timestamp,
       level,
@@ -169,12 +156,8 @@ export class LoggerService {
     const logLine = `[${timestamp}] ${level.toUpperCase()}: ${message}`;
 
     try {
-      // 同时写入到两个日志文件
-      // 1. 系统日志文件
-      fs.appendFileSync(this.systemLogFile, logLine + '\n');
-
-      // 2. server.log文件（Web界面读取的文件）
-      fs.appendFileSync(this.serverLogFile, logLine + '\n');
+      // 写入到统一的日志文件
+      fs.appendFileSync(this.logFile, logLine + '\n');
 
       // 限制日志文件大小，保留最新的配置行数
       this.trimLogFile();
@@ -188,13 +171,13 @@ export class LoggerService {
    */
   trimLogFile() {
     try {
-      if (fs.existsSync(this.systemLogFile)) {
-        const content = fs.readFileSync(this.systemLogFile, 'utf8');
+      if (fs.existsSync(this.logFile)) {
+        const content = fs.readFileSync(this.logFile, 'utf8');
         const lines = content.split('\n').filter(line => line.trim());
 
         if (lines.length > this.config.maxLines) {
           const recentLines = lines.slice(-this.config.maxLines);
-          fs.writeFileSync(this.systemLogFile, recentLines.join('\n'));
+          fs.writeFileSync(this.logFile, recentLines.join('\n'));
         }
       }
     } catch (error) {
@@ -205,13 +188,13 @@ export class LoggerService {
   /**
    * 获取最新的日志
    */
-  getRecentLogs(limit = null) {
+  getLogs(limit = null) {
     if (limit === null) {
       limit = this.config.defaultDisplayCount;
     }
     try {
-      if (fs.existsSync(this.systemLogFile)) {
-        const content = fs.readFileSync(this.systemLogFile, 'utf8');
+      if (fs.existsSync(this.logFile)) {
+        const content = fs.readFileSync(this.logFile, 'utf8');
         const lines = content.split('\n').filter(line => line.trim());
 
         // 返回最新的几行（反转数组）
@@ -229,23 +212,8 @@ export class LoggerService {
    * 获取服务器日志（兼容现有系统）
    */
   getServerLogs(limit = null) {
-    if (limit === null) {
-      limit = this.config.defaultDisplayCount;
-    }
-    try {
-      if (fs.existsSync(this.serverLogFile)) {
-        const content = fs.readFileSync(this.serverLogFile, 'utf8');
-        const lines = content.split('\n').filter(line => line.trim());
-
-        // 返回最新的几行（反转数组）
-        return lines.slice(-limit).reverse();
-      } else {
-        return this.getRecentLogs(limit);
-      }
-    } catch (error) {
-      console.error('读取服务器日志失败:', error);
-      return this.getRecentLogs(limit);
-    }
+    // 直接调用统一的日志读取方法
+    return this.getLogs(limit);
   }
 
   /**
@@ -253,14 +221,9 @@ export class LoggerService {
    */
   clearLogs() {
     try {
-      // 清空系统日志文件
-      if (fs.existsSync(this.systemLogFile)) {
-        fs.writeFileSync(this.systemLogFile, '');
-      }
-
-      // 清空server.log文件
-      if (fs.existsSync(this.serverLogFile)) {
-        fs.writeFileSync(this.serverLogFile, '');
+      // 清空日志文件
+      if (fs.existsSync(this.logFile)) {
+        fs.writeFileSync(this.logFile, '');
       }
     } catch (error) {
       console.error('清空日志失败:', error);

@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import { storageService } from './storage.js';
 import { loggerService } from './logger.js';
+import { formatDateTime } from '../utils/time-utils.js';
 
 // 使用Stealth插件避免被检测
 puppeteer.use(StealthPlugin());
@@ -183,16 +184,23 @@ export class ScraperService {
         // 等待页面数据完全更新
         await page.waitForTimeout(this.config.waitTimes.data);
 
-        // 截图记录数据采集前的页面状态
+        // 截图记录数据采集前的页面状态（仅在开发模式下）
         try {
-          const screenshotDir = this.config.screenshotDir;
-          const screenshotPath = `${screenshotDir}/data-collection-${targetCoin}-${Date.now()}.png`;
+          // 检查是否为开发模式
+          const isDevelopment = process.env.NODE_ENV === 'development';
 
-          // 确保目录存在
-          await fs.promises.mkdir(screenshotDir, { recursive: true });
+          if (isDevelopment) {
+            const screenshotDir = this.config.screenshotDir;
+            const screenshotPath = `${screenshotDir}/${this.generateScreenshotFilename(exchange, targetCoin)}`;
 
-          await page.screenshot({ path: screenshotPath, fullPage: true });
-          console.log(`📸 数据采集前截图已保存: ${screenshotPath}`);
+            // 确保目录存在
+            await fs.promises.mkdir(screenshotDir, { recursive: true });
+
+            await page.screenshot({ path: screenshotPath, fullPage: true });
+            console.log(`📸 数据采集前截图已保存: ${screenshotPath}`);
+          } else {
+            console.log(`📸 生产模式跳过截图保存`);
+          }
         } catch (screenshotError) {
           console.log(`⚠️ 数据采集前截图失败: ${screenshotError.message}`);
         }
@@ -205,31 +213,25 @@ export class ScraperService {
           // 使用唯一标识符存储数据，处理重复币种
           const extractedCoinData = coinData.coins[targetCoin];
           if (extractedCoinData) {
-            // 添加配置信息到数据中
-            extractedCoinData.exchange = exchange;
-            extractedCoinData.timeframe = timeframe;
-            extractedCoinData.coin_key = coinKey;
+            // 为复合键创建完整的数据副本，包含exchange和timeframe信息
+            const coinDataWithKey = { ...extractedCoinData };
+            coinDataWithKey.exchange = exchange;
+            coinDataWithKey.timeframe = timeframe;
+            coinDataWithKey.coin_key = coinKey;
 
-            // 对于重复币种，使用复合键存储
-            allCoinsData[coinKey] = extractedCoinData;
+            // 对于重复币种，优先使用复合键存储，避免数据覆盖
+            allCoinsData[coinKey] = coinDataWithKey;
+            console.log(`💾 复合键数据存储: ${coinKey} -> 利率 ${coinDataWithKey.annual_rate}%, 历史数据 ${coinDataWithKey.history?.length || 0} 条`);
 
-            // 同时也用原始币种符号存储（用于向后兼容），确保包含历史数据
-            if (!allCoinsData[targetCoin]) {
-              allCoinsData[targetCoin] = { ...extractedCoinData };
+            // 复合键存储已经完成，不再创建币种符号副本
+            // 这确保数据的唯一性和正确性，避免复合键被简单键覆盖
+            console.log(`✅ 复合键存储完成: ${coinKey} -> 利率 ${coinDataWithKey.annual_rate}%`);
+
+            // 验证复合键数据是否正确存储
+            if (!allCoinsData[coinKey]) {
+              console.error(`❌ 错误: 复合键 ${coinKey} 存储失败`);
             } else {
-              // 如果已存在，更新历史数据（合并）
-              if (extractedCoinData.history && extractedCoinData.history.length > 0) {
-                if (!allCoinsData[targetCoin].history) {
-                  allCoinsData[targetCoin].history = [];
-                }
-                // 合并历史数据，避免重复
-                const existingTimes = new Set(allCoinsData[targetCoin].history.map(h => h.time));
-                extractedCoinData.history.forEach(h => {
-                  if (!existingTimes.has(h.time)) {
-                    allCoinsData[targetCoin].history.push(h);
-                  }
-                });
-              }
+              console.log(`✅ 复合键 ${coinKey} 存储成功，exchange: ${allCoinsData[coinKey].exchange}, timeframe: ${allCoinsData[coinKey].timeframe}`);
             }
 
             console.log(`✅ ${targetCoin} (${coinKey}) 数据抓取成功，利率: ${extractedCoinData.annual_rate}%`);
@@ -245,7 +247,7 @@ export class ScraperService {
       // 构建最终结果
       const result = {
         exchange: exchange.toLowerCase(),
-        timestamp: new Date().toISOString(),
+        timestamp: formatDateTime(new Date()),
         coins: allCoinsData,
         page_analysis: {
           title: `单交易所抓取完成 - ${coinsToScrape.length} 个币种`,
@@ -1017,6 +1019,12 @@ export class ScraperService {
         };
       }, exchange, coin); // 传递参数
 
+      // 在外部格式化时间戳
+      data.timestamp = formatDateTime(new Date());
+      if (data.extraction_info) {
+        data.extraction_info.extraction_timestamp = formatDateTime(new Date());
+      }
+
       const coinKeys = Object.keys(data.coins);
       console.log(`📊 成功提取真实数据: 找到 ${coinKeys.length} 个币种`);
       coinKeys.forEach(coinKey => {
@@ -1042,8 +1050,19 @@ export class ScraperService {
       status: 'running',
       browser_open: !!this.browser,
       puppeteer_version: await this.getPuppeteerVersion(),
-      last_scrape: new Date().toISOString()
+      last_scrape: formatDateTime(new Date())
     };
+  }
+
+  /**
+   * 生成格式化的截图文件名
+   * 格式: YYYY-MM-DD_HH-mm-ss_交易所_币种.png
+   */
+  generateScreenshotFilename(exchange, coin) {
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
+    const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-'); // HH-mm-ss
+    return `${dateStr}_${timeStr}_${exchange}_${coin}.png`;
   }
 
   /**

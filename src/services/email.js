@@ -5,6 +5,7 @@
 
 import { storageService } from './storage.js';
 import { loggerService } from './logger.js';
+import { formatDateTime, formatDateTimeCN } from '../utils/time-utils.js';
 
 // 从环境变量加载配置
 const emailConfig = {
@@ -19,28 +20,45 @@ const emailConfig = {
  * 获取币种历史数据（支持多交易所、多时间框架）
  */
 function getCoinHistory(coinsData, coin, config) {
-  // 尝试多种方式获取历史数据
+  console.log(`🔍 开始历史数据匹配: 币种 ${coin.symbol}, 交易所 ${coin.exchange}, 时间框架 ${coin.timeframe}`);
 
-  // 1. 首先尝试直接匹配币种符号
-  let history = coinsData[coin.symbol]?.history || [];
-  if (history.length > 0) {
-    return history;
-  }
-
-  // 2. 尝试查找匹配的复合键（交易所+时间框架）
+  // 1. 优先尝试查找匹配的复合键（交易所+时间框架）
   const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
-  history = coinsData[coinKey]?.history || [];
+  let history = coinsData[coinKey]?.history || [];
   if (history.length > 0) {
+    console.log(`✅ 历史数据匹配: 使用复合键 ${coinKey}, 找到 ${history.length} 条历史数据`);
     return history;
   }
 
-  // 3. 遍历所有数据，查找匹配的币种（不考虑交易所和时间框架）
+  // 2. 遍历所有数据，查找精确匹配的币种（包括交易所和时间框架）
   for (const [key, data] of Object.entries(coinsData)) {
-    if (data.symbol === coin.symbol && data.history && data.history.length > 0) {
+    if (data.symbol === coin.symbol &&
+        data.exchange === coin.exchange &&
+        data.timeframe === coin.timeframe &&
+        data.history && data.history.length > 0) {
+      console.log(`✅ 历史数据匹配: 遍历精确匹配找到 ${key}, 找到 ${data.history.length} 条历史数据`);
       return data.history;
     }
   }
 
+  // 3. 遍历所有数据，查找匹配的币种符号且交易所匹配（不考虑时间框架）
+  for (const [key, data] of Object.entries(coinsData)) {
+    if (data.symbol === coin.symbol &&
+        data.exchange === coin.exchange &&
+        data.history && data.history.length > 0) {
+      console.log(`⚠️ 历史数据匹配: 交易所匹配找到 ${key}, 找到 ${data.history.length} 条历史数据 (时间框架可能不匹配)`);
+      return data.history;
+    }
+  }
+
+  // 4. 最后尝试：直接匹配币种符号（仅在没有其他匹配时使用）
+  history = coinsData[coin.symbol]?.history || [];
+  if (history.length > 0) {
+    console.log(`⚠️ 历史数据匹配: 仅使用币种符号 ${coin.symbol}, 找到 ${history.length} 条历史数据 (交易所和时间框架可能不匹配)`);
+    return history;
+  }
+
+  console.log(`❌ 历史数据匹配失败: 币种 ${coin.symbol}, 交易所 ${coin.exchange}, 时间框架 ${coin.timeframe}`);
   return [];
 }
 
@@ -109,7 +127,7 @@ function generateMonitoringSettingsInfo(config) {
     notification_hours: notificationDescription,
     repeat_interval: repeatDescription,
     monitoring_enabled: config?.monitoring_enabled !== false,
-    next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN')
+    next_check_time: formatDateTime(calculateNextCheckTime(config))
   };
 }
 
@@ -126,10 +144,10 @@ export async function sendAlert(env, coin, currentRate, rateData, config) {
       coin: coin.symbol,
       current_rate: currentRate,
       threshold: coin.threshold,
-      timestamp: new Date().toISOString(),
+      timestamp: formatDateTime(new Date()),
       email: config.email,
       exchange: rateData.exchange,
-      detection_time: new Date().toLocaleString('zh-CN'),
+      detection_time: formatDateTimeCN(new Date()),
       history: getCoinHistory(rateData.coins, coin, config),
       all_coins: rateData.coins
     };
@@ -167,9 +185,9 @@ export async function sendRecovery(env, coin, currentRate, config) {
       coin: coin.symbol,
       current_rate: currentRate,
       threshold: coin.threshold,
-      timestamp: new Date().toISOString(),
+      timestamp: formatDateTime(new Date()),
       email: config.email,
-      recovery_time: new Date().toLocaleString('zh-CN')
+      recovery_time: formatDateTimeCN(new Date())
     };
 
     // 准备邮件数据
@@ -203,8 +221,8 @@ export async function sendTestEmail(email) {
     const testData = {
       type: 'test',
       email: email,
-      timestamp: new Date().toISOString(),
-      test_time: new Date().toLocaleString('zh-CN')
+      timestamp: formatDateTime(new Date()),
+      test_time: formatDateTimeCN(new Date())
     };
 
     const emailData = prepareTestEmail(testData);
@@ -330,7 +348,7 @@ function prepareAlertEmail(alertData, env, config = null) {
     // 继续构建其他部分...
     const maxCoinsInTitle = 4;
     const coinSummaries = triggeredCoins.slice(0, maxCoinsInTitle).map(coin => `${coin.symbol}(${coin.current_rate}%)`).join(' ');
-    const title = `${new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })} | ${coinSummaries}${triggeredCoins.length > maxCoinsInTitle ? '...' : ''}`;
+    const title = `${formatDateTime(new Date())} | ${coinSummaries}${triggeredCoins.length > maxCoinsInTitle ? '...' : ''}`;
 
     const monitoringSettings = generateMonitoringSettingsInfo(config);
 
@@ -348,7 +366,7 @@ function prepareAlertEmail(alertData, env, config = null) {
         all_coins_status: allCoinsStatus,
         total_coins: scrapingSummary.filter(r => r.success).length,
         check_interval: '每小时',
-        next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN'),
+        next_check_time: formatDateTime(calculateNextCheckTime(config)),
         exchanges_display: monitoringSettings.exchanges,
         exchanges_detail: monitoringSettings.exchanges_detail,
         monitoring_settings: monitoringSettings
@@ -503,7 +521,7 @@ function prepareAlertEmail(alertData, env, config = null) {
   // 使用与内容相同的触发币种列表，确保一致性
   const maxCoinsInTitle = 4; // 增加到4个币种，因为你有3个币种触发
   const coinSummaries = triggeredCoins.slice(0, maxCoinsInTitle).map(coin => `${coin.symbol}(${coin.current_rate}%)`).join(' ');
-  const title = `${new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })} | ${coinSummaries}${triggeredCoins.length > maxCoinsInTitle ? '...' : ''}`;
+  const title = `${formatDateTime(new Date())} | ${coinSummaries}${triggeredCoins.length > maxCoinsInTitle ? '...' : ''}`;
 
   // 构建所有币种状态数组（支持重复币种）
   let allCoinsStatus = [];
@@ -582,7 +600,7 @@ function prepareAlertEmail(alertData, env, config = null) {
       all_coins_status: allCoinsStatus,
       total_coins: allCoinsStatus.length,
       check_interval: '每小时',
-      next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN'),
+      next_check_time: formatDateTime(calculateNextCheckTime(config)),
       // 交易所和时间框架信息
       exchanges_display: monitoringSettings.exchanges,
       exchanges_detail: monitoringSettings.exchanges_detail,
@@ -596,7 +614,7 @@ function prepareAlertEmail(alertData, env, config = null) {
  * 准备回落通知邮件数据
  */
 function prepareRecoveryEmail(recoveryData, env, config = null) {
-  const title = `${new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })} | ${recoveryData.coin}-回落通知`;
+  const title = `${formatDateTimeCN(new Date())} | ${recoveryData.coin}-回落通知`;
 
   // 构建触发币种数组（回落通知时币种在正常范围内）
   const triggeredCoins = [{
@@ -626,7 +644,7 @@ function prepareRecoveryEmail(recoveryData, env, config = null) {
     notification_hours: '24小时',
     repeat_interval: '3小时',
     monitoring_enabled: true,
-    next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN')
+    next_check_time: formatDateTime(calculateNextCheckTime(config))
   };
 
   return {
@@ -644,7 +662,7 @@ function prepareRecoveryEmail(recoveryData, env, config = null) {
       all_coins_status: allCoinsStatus,
       total_coins: 1,
       check_interval: '每小时',
-      next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN'),
+      next_check_time: formatDateTime(calculateNextCheckTime(config)),
       // 交易所和时间框架信息
       exchanges_display: monitoringSettings.exchanges,
       exchanges_detail: monitoringSettings.exchanges_detail,
@@ -658,7 +676,7 @@ function prepareRecoveryEmail(recoveryData, env, config = null) {
  * 准备测试邮件数据
  */
 function prepareTestEmail(testData) {
-  const title = `${new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })} | CoinGlass监控系统测试`;
+  const title = `${formatDateTimeCN(new Date())} | CoinGlass监控系统测试`;
 
   // 测试邮件的默认监控设置
   const testMonitoringSettings = {
@@ -669,7 +687,7 @@ function prepareTestEmail(testData) {
     notification_hours: '24小时',
     repeat_interval: '3小时',
     monitoring_enabled: true,
-    next_check_time: calculateNextCheckTime().toLocaleString('zh-CN')
+    next_check_time: formatDateTime(calculateNextCheckTime())
   };
 
   return {
@@ -700,7 +718,7 @@ function prepareTestEmail(testData) {
       }],
       total_coins: 1,
       check_interval: '每小时',
-      next_check_time: calculateNextCheckTime().toLocaleString('zh-CN'),
+      next_check_time: formatDateTime(calculateNextCheckTime()),
       // 完整的监控设置信息
       monitoring_settings: testMonitoringSettings
     }
@@ -770,10 +788,10 @@ export async function sendMultiCoinAlert(triggeredCoins, rateData, config) {
     const alertData = {
       type: 'multi_coin_alert',
       triggered_coins: triggeredCoins,
-      timestamp: new Date().toISOString(),
+      timestamp: formatDateTime(new Date()),
       email: config.email,
       exchange: rateData.exchange,
-      detection_time: new Date().toLocaleString('zh-CN'),
+      detection_time: formatDateTimeCN(new Date()),
       all_coins: rateData.coins
     };
 

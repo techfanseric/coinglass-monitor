@@ -7,6 +7,7 @@ import express from 'express';
 import path from 'path';
 import { storageService } from '../services/storage.js';
 import { loggerService } from '../services/logger.js';
+import { formatDateTime } from '../utils/time-utils.js';
 
 const router = express.Router();
 
@@ -36,7 +37,7 @@ router.get('/', async (req, res) => {
 
     const systemStatus = {
       status: 'running',
-      timestamp: new Date().toISOString(),
+      timestamp: formatDateTime(new Date()),
       uptime: process.uptime(),
       platform: process.platform,
       node_version: process.version,
@@ -59,7 +60,7 @@ router.get('/', async (req, res) => {
     res.status(500).json({
       error: '获取系统状态失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -98,7 +99,7 @@ router.get('/coins', async (req, res) => {
     res.status(500).json({
       error: '获取币种状态失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -118,7 +119,7 @@ router.get('/history', async (req, res) => {
       history,
       total_count: history.length,
       limit,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
 
   } catch (error) {
@@ -126,7 +127,7 @@ router.get('/history', async (req, res) => {
     res.status(500).json({
       error: '获取邮件历史失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -144,7 +145,7 @@ router.get('/scheduled', async (req, res) => {
     res.json({
       scheduled_notifications: scheduled,
       total_count: scheduled.length,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
 
   } catch (error) {
@@ -152,7 +153,7 @@ router.get('/scheduled', async (req, res) => {
     res.status(500).json({
       error: '获取待处理通知失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -166,7 +167,7 @@ router.get('/health', async (req, res) => {
 
     const health = {
       status: 'healthy',
-      timestamp: new Date().toISOString(),
+      timestamp: formatDateTime(new Date()),
       services: {
         storage: await checkStorageService(),
         scraper: await checkScraperService(),
@@ -213,7 +214,7 @@ router.get('/health', async (req, res) => {
       status: 'error',
       error: '健康检查失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -234,7 +235,7 @@ router.post('/monitoring', async (req, res) => {
         success: true,
         message: '监控检查完成',
         data: result.data,
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     } else {
       console.log(`⚠️  手动监控检查: ${result.reason || result.error}`);
@@ -242,7 +243,7 @@ router.post('/monitoring', async (req, res) => {
         success: false,
         message: result.reason || result.error || '监控检查失败',
         error: result.error,
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     }
 
@@ -252,7 +253,7 @@ router.post('/monitoring', async (req, res) => {
       success: false,
       error: '手动监控检查失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -264,20 +265,55 @@ router.post('/cleanup', async (req, res) => {
   try {
     console.log('🧹 请求清理系统');
 
-    await storageService.cleanup();
+    // 使用新的数据清理服务
+    const { dataCleanupService } = await import('../services/data-cleanup.js');
+    const cleanupResult = await dataCleanupService.cleanupAll();
 
     res.json({
-      success: true,
-      message: '系统清理完成',
-      timestamp: new Date().toISOString()
+      success: cleanupResult.success,
+      message: cleanupResult.success ? '系统清理完成' : '系统清理部分完成',
+      data: {
+        totalCleaned: cleanupResult.totalCleaned,
+        totalSize: cleanupResult.totalSize,
+        duration: cleanupResult.duration,
+        directories: cleanupResult.directories,
+        errors: cleanupResult.errors
+      },
+      timestamp: formatDateTime(new Date())
     });
 
   } catch (error) {
     console.error('❌ 系统清理失败:', error);
     res.status(500).json({
+      success: false,
       error: '系统清理失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
+    });
+  }
+});
+
+/**
+ * GET /api/status/cleanup-stats - 获取清理统计信息
+ */
+router.get('/cleanup-stats', async (req, res) => {
+  try {
+    const { dataCleanupService } = await import('../services/data-cleanup.js');
+    const stats = await dataCleanupService.getCleanupStats();
+
+    res.json({
+      success: true,
+      data: stats,
+      timestamp: formatDateTime(new Date())
+    });
+
+  } catch (error) {
+    console.error('❌ 获取清理统计失败:', error);
+    res.status(500).json({
+      success: false,
+      error: '获取清理统计失败',
+      message: error.message,
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -369,23 +405,13 @@ router.get('/logs', async (req, res) => {
   try {
     // 静默处理日志请求，避免干扰系统日志
 
-    // 使用正确的日志路径
-    const logPath = process.env.LOGS_DIR ?
-      path.join(process.env.LOGS_DIR, 'server.log') :
-      path.join(process.cwd(), 'logs', 'server.log');
-
-    let logs = [];
-    if (fsSync.existsSync(logPath)) {
-      const content = fsSync.readFileSync(logPath, 'utf8');
-      logs = content.split('\n').filter(line => line.trim());
-    }
-
-    // 获取最新的150行
-    const recentLogs = logs.slice(-150);
+    // 使用LoggerService提供的统一日志读取方法
+    const limit = parseInt(req.query.limit) || 150;
+    const logs = loggerService.getLogs(limit);
 
     // 设置响应头为纯文本
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.send(recentLogs.join('\n'));
+    res.send(logs.join('\n'));
 
   } catch (error) {
     console.error('❌ 获取系统日志失败:', error);
@@ -409,7 +435,7 @@ router.post('/cooldown/reset', async (req, res) => {
         success: false,
         error: '缺少币种符号',
         message: '请提供要重置冷却期的币种符号',
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     }
 
@@ -422,7 +448,7 @@ router.post('/cooldown/reset', async (req, res) => {
         error: '币种不在警报状态',
         message: `币种 ${coinSymbol} 当前不在警报状态，无需重置冷却期`,
         current_status: coinState?.status || 'unknown',
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     }
 
@@ -432,17 +458,17 @@ router.post('/cooldown/reset', async (req, res) => {
 
     const updatedState = {
       ...coinState,
-      next_notification: pastTime.toISOString(),
-      cooldown_reset_at: now.toISOString(),
+      next_notification: formatDateTime(pastTime),
+      cooldown_reset_at: formatDateTime(now),
       cooldown_reset_by: 'manual',
-      updated_at: now.toISOString()
+      updated_at: formatDateTime(now)
     };
 
     // 保存更新后的状态
     const success = await storageService.updateCoinState(coinSymbol, 'alert', updatedState);
 
     if (success) {
-      loggerService.info(`[状态管理] 币种 ${coinSymbol} 冷却期已重置，下次通知时间: ${pastTime.toISOString()}`);
+      loggerService.info(`[状态管理] 币种 ${coinSymbol} 冷却期已重置，下次通知时间: ${formatDateTime(pastTime)}`);
       console.log(`✅ 币种 ${coinSymbol} 冷却期已重置`);
       res.json({
         success: true,
@@ -450,10 +476,10 @@ router.post('/cooldown/reset', async (req, res) => {
         data: {
           coinSymbol,
           previous_next_notification: coinState.next_notification,
-          new_next_notification: pastTime.toISOString(),
-          reset_at: now.toISOString()
+          new_next_notification: formatDateTime(pastTime),
+          reset_at: formatDateTime(now)
         },
-        timestamp: new Date().toISOString()
+        timestamp: formatDateTime(new Date())
       });
     } else {
       throw new Error('状态更新失败');
@@ -465,7 +491,7 @@ router.post('/cooldown/reset', async (req, res) => {
       success: false,
       error: '重置冷却期失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });
@@ -475,23 +501,13 @@ router.post('/cooldown/reset', async (req, res) => {
  */
 router.post('/logs/clear', async (req, res) => {
   try {
-    // 清空server.log文件
-    const logPath = process.env.LOGS_DIR ?
-      path.join(process.env.LOGS_DIR, 'server.log') :
-      path.join(process.cwd(), 'logs', 'server.log');
-
-    if (fsSync.existsSync(logPath)) {
-      fsSync.writeFileSync(logPath, '');
-    }
-
-    // 同时清空logger服务中的系统日志
-    const { loggerService } = await import('../services/logger.js');
+    // 使用LoggerService提供的统一清空方法
     loggerService.clearLogs();
 
     res.json({
       success: true,
       message: '系统日志已清空',
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
 
   } catch (error) {
@@ -500,7 +516,7 @@ router.post('/logs/clear', async (req, res) => {
       success: false,
       error: '清空系统日志失败',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: formatDateTime(new Date())
     });
   }
 });

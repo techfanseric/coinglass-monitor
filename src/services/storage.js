@@ -7,6 +7,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { loggerService } from './logger.js';
+import { formatDateTime, formatDateTimeForFilename } from '../utils/time-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -124,7 +125,7 @@ export class StorageService {
       state[`coin_${coinSymbol}`] = {
         status,
         ...data,
-        updated_at: new Date().toISOString()
+        updated_at: formatDateTime(new Date())
       };
       await this.saveState(state);
       loggerService.info(`[存储服务] 币种 ${coinSymbol} 状态更新: ${status}，数据: ${JSON.stringify({
@@ -147,10 +148,12 @@ export class StorageService {
     try {
       await this.ensureDirectories();
 
-      const historyKey = `email_history_${Date.now()}`;
+      // 生成易读的时间戳文件名格式：YYYY-MM-DD_HH-mm-ss
+      const timestamp = formatDateTimeForFilename(new Date());
+      const historyKey = `email_${timestamp}`;
       const history = {
         ...emailData,
-        sent_at: new Date().toISOString()
+        sent_at: formatDateTime(new Date())
       };
 
       const historyPath = path.join(this.emailHistoryDir, `${historyKey}.json`);
@@ -235,7 +238,7 @@ export class StorageService {
         data,
         coin: coinSymbol,
         scheduled_time: data.scheduled_time,
-        created_at: new Date().toISOString()
+        created_at: formatDateTime(new Date())
       };
 
       await this.saveState(state);
@@ -297,12 +300,14 @@ export class StorageService {
       const scrapeHistoryDir = path.join(this.dataDir, 'scrape-history');
       await fs.mkdir(scrapeHistoryDir, { recursive: true });
 
-      const filename = `scrape-${Date.now()}.json`;
+      // 生成易读的时间戳文件名格式：YYYY-MM-DD_HH-mm-ss
+      const timestamp = formatDateTimeForFilename(new Date());
+      const filename = `scrape_${timestamp}.json`;
       const filepath = path.join(scrapeHistoryDir, filename);
 
       const scrapeData = {
         ...result,
-        saved_at: new Date().toISOString()
+        saved_at: formatDateTime(new Date())
       };
 
       await fs.writeFile(filepath, JSON.stringify(scrapeData, null, 2));
@@ -405,62 +410,156 @@ export class StorageService {
       notification_hours: {
         enabled: false,
         start: '09:00',
-        end: '24:00'
+        end: '23:59'
       },
       repeat_interval: 180
     };
   }
 
   /**
-   * 备份数据
+   * 备份数据 - 简化为单文件格式
    */
   async backup() {
     try {
       const backupDir = path.join(this.dataDir, 'backups');
       await fs.mkdir(backupDir, { recursive: true });
 
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const backupPath = path.join(backupDir, `backup-${timestamp}`);
+      // 使用易读的时间戳格式，与系统其他文件保持一致
+      const timestamp = formatDateTimeForFilename(new Date());
+      const backupPath = path.join(backupDir, `backup_${timestamp}.json`);
 
-      await fs.mkdir(backupPath, { recursive: true });
+      // 读取配置和状态数据
+      const config = await this.getConfig();
+      const state = await this.getState();
 
-      // 备份配置文件
-      await fs.copyFile(this.configPath, path.join(backupPath, 'config.json'));
+      // 创建合并的备份数据
+      const backupData = {
+        backup_info: {
+          created_at: formatDateTime(new Date()),
+          version: '1.0.0',
+          description: 'CoinGlass监控系统配置和状态备份'
+        },
+        config: config || this.getDefaultConfig(),
+        state: state || {}
+      };
 
-      // 备份状态文件
-      await fs.copyFile(this.statePath, path.join(backupPath, 'state.json'));
+      // 写入单个备份文件
+      await fs.writeFile(backupPath, JSON.stringify(backupData, null, 2));
 
       console.log(`💾 数据备份成功: ${backupPath}`);
+      loggerService.info(`[存储服务] 创建备份文件: ${backupPath}`);
       return backupPath;
     } catch (error) {
       console.error('❌ 数据备份失败:', error);
+      loggerService.error(`[存储服务] 备份失败: ${error.message}`);
       return null;
     }
   }
 
   /**
-   * 清理旧数据
+   * 清理旧数据 - 修复逻辑缺陷
    */
   async cleanup() {
     try {
       // 清理超过7天的备份
+      await this.cleanupOldBackups();
+
+      // 清理超过7天的邮件历史（已在logger.js中实现）
+      // 清理超过7天的抓取历史（已在logger.js中实现）
+
+      console.log('🧹 数据清理完成');
+      loggerService.info('[存储服务] 数据清理任务完成');
+    } catch (error) {
+      console.error('❌ 数据清理失败:', error);
+      loggerService.error(`[存储服务] 数据清理失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 清理过期备份文件 - 修复时间判断逻辑
+   */
+  async cleanupOldBackups() {
+    try {
       const backupDir = path.join(this.dataDir, 'backups');
+
+      // 检查备份目录是否存在
+      try {
+        await fs.access(backupDir);
+      } catch {
+        // 目录不存在，无需清理
+        return;
+      }
+
       const backups = await fs.readdir(backupDir);
       const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+      let cleanedCount = 0;
 
       for (const backup of backups) {
-        const backupPath = path.join(backupDir, backup);
-        const stats = await fs.stat(backupPath);
+        // 只处理备份文件（新格式：backup_YYYY-MM-DD_HH-mm-ss.json）
+        // 同时兼容旧格式（backup-ISO格式）
+        const backupMatch = backup.match(/^backup[_-](.+)\.json$/);
+        if (!backupMatch) {
+          continue; // 跳过非备份文件
+        }
 
-        if (stats.mtime.getTime() < sevenDaysAgo) {
-          await fs.rmdir(backupPath, { recursive: true });
-          console.log(`🗑️  清理旧备份: ${backup}`);
+        const timestampStr = backupMatch[1];
+        let backupTime;
+
+        try {
+          // 尝试解析新格式：YYYY-MM-DD_HH-mm-ss
+          if (timestampStr.match(/^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/)) {
+            const [datePart, timePart] = timestampStr.split('_');
+            const [year, month, day] = datePart.split('-');
+            const [hour, minute, second] = timePart.split('-');
+            backupTime = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`);
+          } else {
+            // 尝试解析旧格式：ISO格式（需要精确替换）
+            // 原始格式：2025-09-28T11-52-11-124Z → 2025-09-28T11:52:11.124Z
+            let isoStr = timestampStr;
+
+            // 精确替换：
+            // 1. 替换日期中的 - 为 - (保持不变)
+            // 2. 替换时间中的第一个 - 为 :
+            // 3. 替换时间中的第二个 - 为 :
+            // 4. 替换时间中的第三个 - 为 .
+            isoStr = isoStr.replace(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, '$1T$2:$3:$4.$5Z');
+
+            // 处理没有毫秒的格式：2025-09-28T11-52-00Z → 2025-09-28T11:52:00Z
+            if (!isoStr.includes('.')) {
+              isoStr = isoStr.replace(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})Z$/, '$1T$2:$3:$4Z');
+            }
+
+            backupTime = new Date(isoStr);
+          }
+
+          // 检查时间解析是否有效
+          if (isNaN(backupTime.getTime())) {
+            console.warn(`⚠️  跳过无效时间戳的备份文件: ${backup}`);
+            continue;
+          }
+
+          // 使用解析的时间进行判断，而不是mtime
+          if (backupTime.getTime() < sevenDaysAgo) {
+            const backupPath = path.join(backupDir, backup);
+            await fs.unlink(backupPath);
+            console.log(`🗑️  清理过期备份: ${backup} (创建时间: ${formatDateTime(backupTime)})`);
+            loggerService.info(`[存储服务] 清理过期备份: ${backup}`);
+            cleanedCount++;
+          }
+        } catch (error) {
+          console.warn(`⚠️  处理备份文件时出错 ${backup}: ${error.message}`);
         }
       }
 
-      console.log('🧹 数据清理完成');
+      if (cleanedCount > 0) {
+        console.log(`✅ 清理完成，删除了 ${cleanedCount} 个过期备份文件`);
+        loggerService.info(`[存储服务] 清理完成，删除了 ${cleanedCount} 个过期备份文件`);
+      } else {
+        console.log('✅ 没有需要清理的过期备份文件');
+      }
     } catch (error) {
-      console.error('❌ 数据清理失败:', error);
+      console.error('❌ 清理备份文件失败:', error);
+      loggerService.error(`[存储服务] 清理备份文件失败: ${error.message}`);
     }
   }
 }

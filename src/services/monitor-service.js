@@ -7,6 +7,7 @@ import { storageService } from './storage.js';
 import { emailService } from './email.js';
 import { scraperService } from './scraper.js';
 import { loggerService } from './logger.js';
+import { formatDateTime, formatDateTimeCN } from '../utils/time-utils.js';
 
 /**
  * 运行监控逻辑
@@ -72,16 +73,12 @@ export async function runMonitoring() {
             symbol_display: `${coin.symbol} (${coin.timeframe === '24h' ? '24小时' : coin.timeframe})`
           };
 
-          // 保持原始键以便邮件服务兼容，但只保留一个
-          if (!allCoinsData[coin.symbol]) {
-            allCoinsData[coin.symbol] = coinDataWithMeta;
-          }
+          // 复合键存储已经完成，不再创建币种符号副本
+          // 这确保数据的唯一性和正确性，避免复合键被简单键覆盖
 
           console.log(`✅ ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据抓取成功，利率: ${coinRateData.coins[coin.symbol].annual_rate}%`);
 
-          // 检查阈值
-          const result = await checkCoinThreshold(coin, coinRateData, config);
-          results.push(result);
+          // 注意：阈值检查将在所有币种抓取完成后统一进行（第147-157行）
         } else {
           console.warn(`⚠️ ${coin.symbol} 数据抓取失败，跳过阈值检查`);
           results.push({
@@ -109,7 +106,7 @@ export async function runMonitoring() {
     // 构建统一的返回数据结构
     const combinedRateData = {
       exchange: 'mixed', // 表示混合配置
-      timestamp: new Date().toISOString(),
+      timestamp: formatDateTime(new Date()),
       coins: allCoinsData,
       source: 'multi_exchange_scraping',
       scraping_info: {
@@ -163,7 +160,7 @@ export async function runMonitoring() {
       data: {
         rateData: combinedRateData,
         results,
-        timestamp: new Date().toISOString(),
+        timestamp: formatDateTime(new Date()),
         scraping_summary: combinedRateData.scraping_info
       }
     };
@@ -178,12 +175,25 @@ export async function runMonitoring() {
  * 检查单个币种的阈值
  */
 export async function checkCoinThreshold(coin, rateData, config) {
-  const currentRate = rateData.coins[coin.symbol]?.annual_rate;
+  // 优先使用复合键查找数据
+  const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+  let coinData = rateData.coins[coinKey];
+
+  // 如果复合键找不到，回退到简单键查找（向后兼容）
+  if (!coinData) {
+    coinData = rateData.coins[coin.symbol];
+    console.log(`⚠️  复合键 ${coinKey} 未找到，使用简单键 ${coin.symbol} 查找`);
+  }
+
+  const currentRate = coinData?.annual_rate;
   if (!currentRate) {
-    loggerService.warn(`[阈值检查] 币种 ${coin.symbol} 数据不存在`);
-    console.log(`币种 ${coin.symbol} 数据不存在`);
+    loggerService.warn(`[阈值检查] 币种 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据不存在`);
+    console.log(`❌ 币种 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据不存在`);
+    console.log(`🔍 可用的数据键: ${Object.keys(rateData.coins).join(', ')}`);
     return { coin: coin.symbol, success: false, reason: 'data_not_found' };
   }
+
+  console.log(`✅ 找到币种数据: ${coin.symbol} (${coin.exchange}/${coin.timeframe}) -> 利率 ${currentRate}%`);
 
   // 获取币种状态
   const state = await storageService.getCoinState(coin.symbol);
@@ -207,8 +217,8 @@ export async function checkCoinThreshold(coin, rateData, config) {
           const success = await emailService.sendAlert(coin, currentRate, rateData, config);
           if (success) {
             await storageService.updateCoinState(coin.symbol, 'alert', {
-              last_notification: now.toISOString(),
-              next_notification: new Date(now.getTime() + config.repeat_interval * 60 * 1000).toISOString(), // 改为分钟
+              last_notification: formatDateTime(now),
+              next_notification: formatDateTime(new Date(now.getTime() + config.repeat_interval * 60 * 1000)), // 改为分钟
               last_rate: currentRate
             });
             result.actions.push('alert_sent');
@@ -226,14 +236,14 @@ export async function checkCoinThreshold(coin, rateData, config) {
             currentRate,
             rateData,
             config,
-            scheduled_time: nextNotificationTime.toISOString()
+            scheduled_time: formatDateTime(nextNotificationTime)
           });
           await storageService.updateCoinState(coin.symbol, 'alert', {
             last_rate: currentRate,
             pending_notification: true
           });
           result.actions.push('alert_scheduled');
-          console.log(`币种 ${coin.symbol} 触发警报，但不在通知时间段内，已安排在 ${nextNotificationTime.toLocaleString()} 发送`);
+          console.log(`币种 ${coin.symbol} 触发警报，但不在通知时间段内，已安排在 ${formatDateTimeCN(nextNotificationTime)} 发送`);
         }
       } else if (state.status === 'alert' && now >= new Date(state.next_notification)) {
         // 冷却期结束，再次通知
@@ -241,8 +251,8 @@ export async function checkCoinThreshold(coin, rateData, config) {
           const success = await emailService.sendAlert(coin, currentRate, rateData, config);
           if (success) {
             await storageService.updateCoinState(coin.symbol, 'alert', {
-              last_notification: now.toISOString(),
-              next_notification: new Date(now.getTime() + config.repeat_interval * 60 * 1000).toISOString(), // 改为分钟
+              last_notification: formatDateTime(now),
+              next_notification: formatDateTime(new Date(now.getTime() + config.repeat_interval * 60 * 1000)), // 改为分钟
               last_rate: currentRate
             });
             result.actions.push('repeat_alert_sent');
@@ -258,14 +268,14 @@ export async function checkCoinThreshold(coin, rateData, config) {
             currentRate,
             rateData,
             config,
-            scheduled_time: nextNotificationTime.toISOString()
+            scheduled_time: formatDateTime(nextNotificationTime)
           });
           await storageService.updateCoinState(coin.symbol, 'alert', {
-            next_notification: nextNotificationTime.toISOString(),
+            next_notification: formatDateTime(nextNotificationTime),
             last_rate: currentRate
           });
           result.actions.push('repeat_alert_scheduled');
-          console.log(`币种 ${coin.symbol} 重复警报，但不在通知时间段内，已安排在 ${nextNotificationTime.toLocaleString()} 发送`);
+          console.log(`币种 ${coin.symbol} 重复警报，但不在通知时间段内，已安排在 ${formatDateTimeCN(nextNotificationTime)} 发送`);
         }
       } else {
         result.actions.push('in_cooling_period');
@@ -291,14 +301,14 @@ export async function checkCoinThreshold(coin, rateData, config) {
             coin,
             currentRate,
             config,
-            scheduled_time: nextNotificationTime.toISOString()
+            scheduled_time: formatDateTime(nextNotificationTime)
           });
           await storageService.updateCoinState(coin.symbol, 'normal', {
             last_rate: currentRate,
             pending_notification: true
           });
           result.actions.push('recovery_scheduled');
-          console.log(`币种 ${coin.symbol} 回落通知，但不在通知时间段内，已安排在 ${nextNotificationTime.toLocaleString()} 发送`);
+          console.log(`币种 ${coin.symbol} 回落通知，但不在通知时间段内，已安排在 ${formatDateTimeCN(nextNotificationTime)} 发送`);
         }
       } else {
         result.actions.push('already_normal');
@@ -347,7 +357,7 @@ function shouldTriggerNow(config) {
 }
 
 /**
- * 检查当前时间是否在允许的通知时间段内
+ * 检查当前时间是否在允许的通知时间段内，支持跨天逻辑和配置验证
  */
 function isWithinNotificationHours(config) {
   // 如果没有启用时间限制，始终允许通知
@@ -355,28 +365,66 @@ function isWithinNotificationHours(config) {
     return true;
   }
 
+  // 验证时间配置完整性
+  if (!config.notification_hours.start || !config.notification_hours.end) {
+    console.warn('⚠️ notification_hours 配置不完整，自动禁用时间限制');
+    return true; // 配置不完整时回退到无限制状态
+  }
+
+  const startTime = parseTime(config.notification_hours.start);
+  const endTime = parseTime(config.notification_hours.end);
+
+  // 验证时间格式有效性
+  if (startTime === null || endTime === null) {
+    console.warn('⚠️ notification_hours 时间格式无效，自动禁用时间限制');
+    return true; // 时间格式无效时回退到无限制状态
+  }
+
   const now = new Date();
   const currentHour = now.getHours();
   const currentMinute = now.getMinutes();
   const currentTime = currentHour * 60 + currentMinute;
 
-  const startTime = parseTime(config.notification_hours.start);
-  const endTime = parseTime(config.notification_hours.end);
-
-  return currentTime >= startTime && currentTime < endTime;
+  // 支持跨天时间段（例如 20:00-06:00）
+  if (startTime <= endTime) {
+    // 正常时间段，如 09:00-18:00
+    return currentTime >= startTime && currentTime < endTime;
+  } else {
+    // 跨天时间段，如 20:00-06:00
+    return currentTime >= startTime || currentTime < endTime;
+  }
 }
 
 /**
- * 获取下一个通知时间
+ * 获取下一个通知时间，支持配置验证
  */
 function getNextNotificationTime(config) {
   const now = new Date();
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
+  // 验证时间配置完整性
+  if (!config.notification_hours || !config.notification_hours.start) {
+    console.warn('⚠️ getNextNotificationTime: 配置不完整，使用默认时间 09:00');
+    tomorrow.setHours(9);
+    tomorrow.setMinutes(0);
+    tomorrow.setSeconds(0);
+    tomorrow.setMilliseconds(0);
+    return tomorrow;
+  }
+
   const startTime = parseTime(config.notification_hours.start);
-  tomorrow.setHours(Math.floor(startTime / 60));
-  tomorrow.setMinutes(startTime % 60);
+
+  // 验证时间格式有效性
+  if (startTime === null) {
+    console.warn('⚠️ getNextNotificationTime: 时间格式无效，使用默认时间 09:00');
+    tomorrow.setHours(9);
+    tomorrow.setMinutes(0);
+  } else {
+    tomorrow.setHours(Math.floor(startTime / 60));
+    tomorrow.setMinutes(startTime % 60);
+  }
+
   tomorrow.setSeconds(0);
   tomorrow.setMilliseconds(0);
 
@@ -384,10 +432,28 @@ function getNextNotificationTime(config) {
 }
 
 /**
- * 解析时间字符串为分钟数
+ * 解析时间字符串为分钟数，支持验证和错误处理
  */
 function parseTime(timeStr) {
-  const [hours, minutes] = timeStr.split(':').map(Number);
+  if (!timeStr || typeof timeStr !== 'string') {
+    return null;
+  }
+
+  const parts = timeStr.split(':');
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  const hours = Number(parts[0]);
+  const minutes = Number(parts[1]);
+
+  // 验证时间格式有效性
+  if (isNaN(hours) || isNaN(minutes) ||
+      hours < 0 || hours > 23 ||
+      minutes < 0 || minutes > 59) {
+    return null;
+  }
+
   return hours * 60 + minutes;
 }
 
