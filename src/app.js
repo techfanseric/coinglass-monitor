@@ -11,6 +11,9 @@ import fsSync from 'fs';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import os from 'os';
+import { createConnection } from 'net';
+import { spawn, execSync } from 'child_process';
+import readline from 'readline';
 
 // 获取当前文件目录
 const __filename = fileURLToPath(import.meta.url);
@@ -34,15 +37,224 @@ try {
 }
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const platform = os.platform();
+
+// 端口占用检查
+async function checkPort(port) {
+  try {
+    // 使用 lsof 命令直接检查端口占用（macOS/Linux）
+    if (platform !== 'win32') {
+      const pid = execSync(`lsof -ti:${port}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+      return pid.length > 0;
+    } else {
+      // Windows 使用网络连接检查
+      return new Promise((resolve) => {
+        const server = createConnection({ host: 'localhost', port });
+        let resolved = false;
+
+        server.on('connect', () => {
+          if (!resolved) {
+            resolved = true;
+            server.destroy();
+            resolve(true); // 端口被占用
+          }
+        });
+
+        server.on('error', (err) => {
+          if (!resolved) {
+            resolved = true;
+            resolve(err.code === 'ECONNREFUSED' ? false : true);
+          }
+        });
+
+        setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            server.destroy();
+            resolve(false);
+          }
+        }, 2000);
+      });
+    }
+  } catch (error) {
+    // lsof 命令失败，说明端口未被占用
+    return false;
+  }
+}
+
+// 获取占用端口的进程信息
+function getPortProcess(port) {
+  try {
+    if (platform === 'win32') {
+      // Windows
+      const result = spawn('cmd', ['/c', `netstat -ano | findstr :${port}`], {
+        stdio: 'pipe',
+        shell: true
+      });
+
+      // 简化处理：返回基本信息
+      return { pid: 'unknown', name: 'Windows进程' };
+    } else {
+      // macOS/Linux - 使用同步方式获取进程信息
+      try {
+        const pid = execSync(`lsof -ti:${port}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+        if (pid) {
+          try {
+            const processName = execSync(`ps -p ${pid} -o comm=`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+            return { pid: parseInt(pid), name: processName || '未知进程' };
+          } catch {
+            return { pid: parseInt(pid), name: '未知进程' };
+          }
+        }
+      } catch (error) {
+        // 无法获取进程信息
+      }
+    }
+  } catch (error) {
+    // 无法获取进程信息
+  }
+  return null;
+}
+
+// 交互式询问用户
+async function askToKillProcess(port, processInfo) {
+  if (process.env.SKIP_PORT_CHECK === 'true') {
+    return true;
+  }
+
+  console.log(`⚠️  端口 ${port} 已被占用`);
+  if (processInfo) {
+    console.log(`进程信息: PID ${processInfo.pid}, 名称: ${processInfo.name}`);
+  }
+  console.log('');
+
+  // 在非交互环境下（如CI/CD），自动终止进程
+  // 但在开发模式下仍然保持交互
+  if (!process.stdin.isTTY && process.env.NODE_ENV === 'production') {
+    console.log('🔄 非交互环境，自动终止占用进程...');
+    return true;
+  }
+
+  console.log('💡 建议关闭占用进程以继续启动');
+  console.log('📝 直接回车 = 关闭占用进程并继续');
+  console.log('📝 Ctrl+C = 退出程序');
+  console.log('');
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  return new Promise((resolve) => {
+    rl.question('', (answer) => {
+      rl.close();
+      // 直接回车或任何输入都继续（关闭进程）
+      resolve(true);
+    });
+
+    // 设置超时，10秒后自动继续
+    setTimeout(() => {
+      if (!rl.closed) {
+        rl.close();
+        console.log('\n⏰ 超时，自动继续启动...');
+        resolve(true);
+      }
+    }, 10000);
+  });
+}
+
+// 终止进程
+function killProcess(pid) {
+  try {
+    if (platform === 'win32') {
+      spawn('taskkill', ['/F', '/PID', pid], { stdio: 'ignore' });
+    } else {
+      process.kill(pid, 'SIGTERM');
+      // 2秒后检查是否还在运行
+      setTimeout(() => {
+        try {
+          process.kill(pid, 0);
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // 进程已终止
+        }
+      }, 2000);
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// 端口占用处理
+async function handlePortOccupancy() {
+  if (!PORT) {
+    console.error('❌ 错误: 未配置 PORT 环境变量');
+    process.exit(1);
+  }
+
+  const port = parseInt(PORT);
+  const isOccupied = await checkPort(port);
+
+  if (isOccupied) {
+    const processInfo = getPortProcess(port);
+    const shouldKill = await askToKillProcess(port, processInfo);
+
+    if (shouldKill && processInfo?.pid && processInfo.pid !== 'unknown') {
+      console.log('🔄 正在关闭占用进程...');
+
+      if (killProcess(processInfo.pid)) {
+        console.log('✅ 占用进程已关闭');
+
+        // 等待端口释放，增加重试检查
+        console.log('⏳ 等待端口释放...');
+        let retries = 0;
+        const maxRetries = 10;
+
+        while (retries < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          const stillOccupied = await checkPort(port);
+
+          if (!stillOccupied) {
+            console.log('✅ 端口已释放');
+            break;
+          }
+
+          retries++;
+          if (retries < maxRetries) {
+            console.log(`⏳ 等待端口释放中... (${retries}/${maxRetries})`);
+          }
+        }
+
+        // 最后检查
+        const stillOccupied = await checkPort(port);
+        if (stillOccupied) {
+          console.log('⚠️  端口仍被占用，请手动处理');
+          process.exit(1);
+        } else {
+          console.log('✅ 端口已释放并检查通过');
+        }
+      } else {
+        console.log('❌ 无法关闭进程，请手动处理');
+        process.exit(1);
+      }
+    }
+  } else {
+    // 端口未被占用，直接显示检查通过
+    console.log(`✅ 端口 ${port} 检查通过`);
+  }
+}
 
 // 确保必要目录存在
 async function ensureDirectories() {
   const directories = [
     process.env.DATA_DIR || path.join(__dirname, '..', 'data'),
-    process.env.LOGS_DIR || path.join(__dirname, '..', 'logs')
+    process.env.LOGS_DIR || path.join(__dirname, '..', 'logs'),
+    path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'email-history'),
+    path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'scrape-history'),
+    path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'backups')
   ];
 
   for (const dir of directories) {
@@ -53,6 +265,32 @@ async function ensureDirectories() {
       console.log(`📁 创建目录: ${dir}`);
     }
   }
+}
+
+// 环境准备
+async function prepareEnvironment() {
+  console.log('🔧 环境准备中...');
+
+  // 确保目录存在
+  await ensureDirectories();
+
+  // 检查并复制 .env 文件
+  const envPath = path.join(projectRoot, '.env');
+  const envExamplePath = path.join(projectRoot, '.env.example');
+
+  try {
+    await fs.access(envPath);
+    // .env 文件已存在，静默处理（因为前面已显示加载成功）
+  } catch {
+    try {
+      await fs.copyFile(envExamplePath, envPath);
+      console.log('✅ .env 文件已创建（从 .env.example 复制）');
+    } catch {
+      console.log('⚠️  警告: 无法创建 .env 文件，请手动创建');
+    }
+  }
+
+  console.log('✅ 环境准备完成');
 }
 
 // 从环境变量加载服务器配置
@@ -87,7 +325,15 @@ console.log = function(...args) {
 
   // 写入到日志文件
   try {
-    const timestamp = new Date().toISOString();
+    const timestamp = new Date().toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).replace(/\//g, '-');
     const logMessage = args.join(' ');
     const logLine = `[${timestamp}] ${logMessage}\n`;
 
@@ -103,7 +349,15 @@ console.error = function(...args) {
 
   // 写入到日志文件
   try {
-    const timestamp = new Date().toISOString();
+    const timestamp = new Date().toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).replace(/\//g, '-');
     const logMessage = args.join(' ');
     const logLine = `[${timestamp}] ERROR: ${logMessage}\n`;
 
@@ -119,7 +373,15 @@ console.warn = function(...args) {
 
   // 写入到日志文件
   try {
-    const timestamp = new Date().toISOString();
+    const timestamp = new Date().toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).replace(/\//g, '-');
     const logMessage = args.join(' ');
     const logLine = `[${timestamp}] WARN: ${logMessage}\n`;
 
@@ -141,7 +403,15 @@ app.use((req, res, next) => {
     return next();
   }
 
-  const timestamp = new Date().toISOString();
+  const timestamp = new Date().toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).replace(/\//g, '-');
   const logMessage = `${timestamp} - ${req.method} ${req.url}\n`;
 
   // 输出到控制台
@@ -169,14 +439,22 @@ app.use('/api/scrape', scrapeRoutes);
 console.log('✅ API 路由加载完成');
 
 // 静态文件服务 - 提供前端界面
-app.use(express.static(path.join(__dirname, '..')));
+app.use(express.static(path.join(__dirname, '..', 'public')));
 
 
 // 健康检查端点
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    timestamp: new Date().toISOString(),
+    timestamp: new Date().toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).replace(/\//g, '-'),
     platform: platform,
     environment: NODE_ENV,
     version: '1.0.0',
@@ -190,7 +468,7 @@ app.get('/health', (req, res) => {
 
 // 前端界面路由 - 必须在API路由之后
 app.get('/', (req, res) => {
-  const indexPath = path.join(__dirname, '..', 'index.html');
+  const indexPath = path.join(__dirname, '..', 'public', 'index.html');
 
   // 读取HTML文件并注入前端配置
   try {
@@ -232,7 +510,15 @@ app.use((error, req, res, next) => {
   res.status(error.status || 500).json({
     error: '服务器内部错误',
     message: NODE_ENV === 'development' ? error.message : '请联系管理员',
-    timestamp: new Date().toISOString(),
+    timestamp: new Date().toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).replace(/\//g, '-'),
     path: req.url
   });
 });
@@ -289,11 +575,81 @@ function startLogCleanup() {
   }, 60 * 1000); // 1分钟后执行
 }
 
+// Git自动更新（仅在脚本启动模式下明确启用）
+function startGitAutoUpdate() {
+  // 只有明确启用自动更新时才启动（防止误操作）
+  if (process.env.ENABLE_AUTO_UPDATE !== 'true') {
+    return; // 静默跳过，这是默认安全设置
+  }
+
+  console.log('🔄 启动Git自动更新...');
+
+  // 检查是否为Git仓库
+  try {
+    const isGitRepo = spawn('git', ['rev-parse', '--git-dir'], { stdio: 'ignore' });
+    if (isGitRepo.status !== 0) {
+      console.log('⚠️  非Git仓库，跳过自动更新');
+      return;
+    }
+  } catch {
+    console.log('⚠️  Git检查失败，跳过自动更新');
+    return;
+  }
+
+  // 每5分钟检查一次更新
+  setInterval(async () => {
+    try {
+      const gitStatus = spawn('git', ['status', '--porcelain'], { stdio: 'pipe' });
+      if (gitStatus.status !== 0) return;
+
+      // 检查远程更新
+      const fetchResult = spawn('git', ['fetch'], { stdio: 'ignore' });
+      if (fetchResult.status !== 0) return;
+
+      const localCommit = spawn('git', ['rev-parse', 'HEAD'], { stdio: 'pipe' });
+      const remoteCommit = spawn('git', ['rev-parse', 'origin/main'], { stdio: 'pipe' });
+
+      if (localCommit.status === 0 && remoteCommit.status === 0) {
+        const local = localCommit.stdout.toString().trim();
+        const remote = remoteCommit.stdout.toString().trim();
+
+        if (local !== remote) {
+          console.log('🔄 发现新版本，开始更新...');
+
+          // 备份状态
+          try {
+            const statePath = path.join(process.env.DATA_DIR || './data', 'state.json');
+            const backupPath = path.join(process.env.DATA_DIR || './data', 'state.json.backup');
+            await fs.copyFile(statePath, backupPath);
+          } catch {}
+
+          // 拉取更新
+          const pullResult = spawn('git', ['pull'], { stdio: 'inherit' });
+          if (pullResult.status === 0) {
+            console.log('✅ 更新完成，服务将在5秒后重启...');
+            setTimeout(() => {
+              process.exit(0); // 进程管理器会自动重启
+            }, 5000);
+          }
+        }
+      }
+    } catch (error) {
+      console.log('⚠️  自动更新检查失败:', error.message);
+    }
+  }, 5 * 60 * 1000); // 5分钟
+}
+
 // 启动服务器
 async function startServer() {
   try {
-    // 确保目录存在
-    await ensureDirectories();
+    console.log('🚀 CoinGlass 监控系统启动中...');
+    console.log('');
+
+    // 环境准备
+    await prepareEnvironment();
+
+    // 端口占用检查
+    await handlePortOccupancy();
 
     // 启动日志清理任务
     startLogCleanup();
@@ -301,18 +657,19 @@ async function startServer() {
     // 启动监控服务
     await startMonitoringService();
 
+    // 启动Git自动更新
+    startGitAutoUpdate();
+
     // 启动HTTP服务器
     app.listen(PORT, () => {
       console.log('\n🚀 CoinGlass 监控系统启动成功！');
       console.log('=====================================');
       console.log(`🌐 服务地址: http://localhost:${PORT}`);
       console.log(`🔍 健康检查: http://localhost:${PORT}/health`);
-      console.log(`💻 平台: ${platform}`);
-      console.log(`🔧 环境: ${NODE_ENV}`);
-      console.log(`📁 数据目录: ${process.env.DATA_DIR || './data'}`);
-      console.log(`📋 日志目录: ${process.env.LOGS_DIR || './logs'}`);
+      console.log(`💻 平台: ${platform} | 🔧 环境: ${NODE_ENV}`);
+      console.log(`📁 数据目录: ${process.env.DATA_DIR || './data'} | 📋 日志目录: ${process.env.LOGS_DIR || './logs'}`);
       console.log('=====================================');
-      console.log('⏰ 启动时间:', new Date().toLocaleString());
+      console.log(`⏰ 启动时间: ${new Date().toLocaleString()}`);
       console.log('🗑️ 日志清理: 每天凌晨2点自动清理7天前的日志');
       });
 

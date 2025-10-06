@@ -150,7 +150,15 @@ export class LoggerService {
    * 写入系统日志
    */
   writeLog(level, message, meta = {}) {
-    const timestamp = new Date().toISOString();
+    const timestamp = new Date().toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).replace(/\//g, '-');
     const logEntry = {
       timestamp,
       level,

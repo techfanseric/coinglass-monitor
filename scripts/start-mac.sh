@@ -1,8 +1,48 @@
 #!/bin/bash
 
 echo "===================================="
-echo "CoinGlass 监控系统 - Mac 启动脚本"
+echo "CoinGlass 监控系统启动"
 echo "===================================="
+
+# 参数处理
+DISABLE_AUTO_UPDATE=false
+PORT=""
+DEV_MODE=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --disable-auto-update)
+            DISABLE_AUTO_UPDATE=true
+            shift
+            ;;
+        --dev)
+            DEV_MODE=true
+            shift
+            ;;
+        --port)
+            PORT="$2"
+            shift 2
+            ;;
+        *)
+            echo "❌ 未知参数: $1"
+            echo "支持的参数: --dev, --disable-auto-update, --port <端口号>"
+            exit 1
+            ;;
+    esac
+done
+
+echo "🌐 端口: $PORT"
+if [ "$DEV_MODE" = true ]; then
+    echo "🔧 开发模式: 启用"
+    echo "⚠️  自动更新: 禁用（开发模式，代码安全）"
+elif [ "$DISABLE_AUTO_UPDATE" = false ]; then
+    echo "🚀 生产模式: 启用"
+    echo "🔄 自动更新: 启用（自动保持最新）"
+else
+    echo "🚀 生产模式: 启用"
+    echo "⚠️  自动更新: 禁用（用户指定）"
+fi
+echo ""
 
 # 获取脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,65 +50,109 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 # 切换到项目目录
 cd "$PROJECT_DIR" || {
-    echo "❌ 错误: 无法切换到项目目录 $PROJECT_DIR"
+    echo "❌ 错误: 无法切换到项目目录"
     exit 1
 }
 
-echo "📁 项目目录: $PROJECT_DIR"
-
-# 检查 package.json 是否存在
+# 基础检查
 if [ ! -f "package.json" ]; then
-    echo "❌ 错误: 未找到 package.json 文件"
-    echo "请确保在正确的项目目录中运行此脚本"
+    echo "❌ 错误: 未找到 package.json"
     exit 1
 fi
 
-# 检查 Node.js 是否安装
 if ! command -v node &> /dev/null; then
-    echo "❌ 错误: 未找到 Node.js"
-    echo "请先安装 Node.js: https://nodejs.org/"
+    echo "❌ 错误: 请先安装 Node.js"
     exit 1
 fi
 
-echo "✅ Node.js 已安装: $(node --version)"
+echo "✅ Node.js: $(node --version)"
+
+# 读取 .env 文件中的端口配置
+get_env_port() {
+    local env_file=".env"
+    local env_example=".env.example"
+
+    # 优先使用 .env 文件，其次使用 .env.example
+    local file_to_read=""
+    if [ -f "$env_file" ]; then
+        file_to_read="$env_file"
+    elif [ -f "$env_example" ]; then
+        file_to_read="$env_example"
+    fi
+
+    if [ -n "$file_to_read" ]; then
+        local port=$(grep "^PORT=" "$file_to_read" | cut -d'=' -f2 | tr -d ' ')
+        if [ -n "$port" ]; then
+            echo "$port"
+            return
+        fi
+    fi
+
+    # 如果都没有找到，报错并退出
+    echo "❌ 错误: 未找到 PORT 配置" >&2
+    echo "请确保 .env 文件中包含 PORT 配置" >&2
+    exit 1
+}
+
+# 环境准备
+export NODE_ENV=production
+
+# 确定端口号：命令行参数 > .env > .env.example > 默认值
+if [ -z "$PORT" ]; then
+    PORT=$(get_env_port)
+    echo "🔧 从 .env 文件读取端口配置: $PORT"
+fi
+
+export PORT=$PORT
+
+# 复制环境文件
+if [ ! -f ".env" ]; then
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+        echo "✅ .env 文件已创建"
+    fi
+else
+    echo "✅ .env 文件已存在"
+fi
+
+# 创建必要目录
+mkdir -p data logs data/email-history data/scrape-history data/backups
+echo "✅ 目录结构准备完成"
+
+# 安装依赖
+if [ ! -d "node_modules" ]; then
+    echo "📦 安装依赖..."
+    npm install || {
+        echo "❌ 依赖安装失败"
+        exit 1
+    }
+    echo "✅ 依赖安装完成"
+else
+    echo "✅ 依赖已安装"
+fi
 
 # 设置环境变量
-export NODE_ENV=production
-export DATA_DIR=./data
-export LOGS_DIR=./logs
-
-# 复制 Mac 环境配置
-if [ -f ".env.mac" ]; then
-    cp .env.mac .env
-    echo "✅ Mac 环境配置已加载"
+if [ "$DEV_MODE" = true ]; then
+    export NODE_ENV=development
+    echo "🔧 开发模式（无自动更新）"
 else
-    echo "⚠️  警告: .env.mac 文件不存在，使用默认配置"
-    echo "💡 提示: 运行 'node scripts/setup-mac.js' 来创建配置文件"
-fi
-
-# 创建必要的目录
-mkdir -p data logs data/email-history data/scrape-history data/backups
-
-# 检查依赖是否安装
-if [ ! -d "node_modules" ]; then
-    echo "📦 正在安装依赖..."
-    npm install
-    if [ $? -ne 0 ]; then
-        echo "❌ 依赖安装失败"
-        echo "💡 提示: 请检查网络连接或尝试清除 npm 缓存"
-        exit 1
+    export NODE_ENV=production
+    if [ "$DISABLE_AUTO_UPDATE" = false ]; then
+        export ENABLE_AUTO_UPDATE=true
+        echo "🚀 生产模式（自动更新已启用）"
+    else
+        echo "🚀 生产模式（自动更新已禁用）"
     fi
-    echo "✅ 依赖安装完成"
 fi
+
+export PORT=$PORT
 
 # 启动服务
-echo "🚀 启动 CoinGlass 监控系统..."
-echo ""
-echo "服务将在以下地址启动:"
-echo "- 前端界面: http://localhost:3001"
-echo "- API接口: http://localhost:3001/api"
-echo "- 健康检查: http://localhost:3001/health"
-echo ""
+echo "🚀 启动应用服务..."
 echo ""
 
-npm start
+if [ "$DEV_MODE" = true ]; then
+    npm run dev
+else
+    npm start
+fi

@@ -12,7 +12,8 @@ export default {
 
   // 测试文件匹配模式
   testMatch: [
-    '**/integration.test.js'
+    '**/*.test.js',
+    '**/test-*.js'
   ],
 
   // 覆盖率配置

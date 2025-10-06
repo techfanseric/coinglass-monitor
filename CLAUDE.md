@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**最新更新说明**：
+- 文件已根据当前代码库状态进行验证和更新
+- 测试配置已根据实际 Jest 配置文件进行修正
+- 脚本功能已根据 package.json 中的实际脚本进行更新
+- 添加了 ES 模块和测试架构的具体说明
+
 ## Project Overview
 
 这是一个基于本地 Express 服务器的 CoinGlass 利率监控系统。它监控加密货币借贷利率并在超过阈值时发送警报。
@@ -22,7 +28,10 @@ This is a CoinGlass interest rate monitoring system based on a local Express ser
   - `config.js` - 配置管理API
   - `status.js` - 状态查询API
   - `scrape.js` - 数据抓取API
-- **index.html** - 前端界面（通过Express静态文件服务）
+- **public/** - 前端静态文件（通过Express静态文件服务）：
+  - `index.html` - 前端管理界面HTML结构
+  - `style.css` - 前端样式文件
+  - `script.js` - 前端JavaScript逻辑
 
 ### Key Components
 - **本地文件存储**：使用本地文件系统存储配置、状态和邮件历史数据
@@ -37,6 +46,14 @@ This is a CoinGlass interest rate monitoring system based on a local Express ser
 - **Web管理界面**：提供直观的配置管理和状态监控界面
 - **智能配置系统**：自动检测Chrome路径和创建必要目录
 
+### Frontend Architecture
+前端采用模块化架构，代码分离提升可维护性：
+- **index.html** (147行) - 纯HTML结构，不含内联样式和脚本
+- **style.css** (475行) - 所有UI样式，响应式设计和主题
+- **script.js** (913行) - 完整的前端逻辑，包括配置管理、状态更新、通知系统等
+- **Express静态服务** - 通过 `/public` 目录提供静态文件服务
+- **配置注入** - 服务端在HTML中动态注入前端环境变量
+
 ## Development Commands
 
 ### Local Development
@@ -49,9 +66,7 @@ npm run monitor         # Run monitoring service standalone
 
 ### Platform-specific Scripts
 ```bash
-npm run setup           # Run general setup script
-npm run setup:windows   # Run Windows-specific setup script (Chrome detection, directory creation)
-npm run setup:mac       # Run macOS-specific setup script
+npm run setup           # Run general setup script (auto-detects Chrome and creates directories)
 npm run cleanup         # Run cleanup script (Note: cleanup.js script referenced but may not exist)
 ```
 
@@ -72,10 +87,27 @@ npm run monitor         # Run monitoring service standalone
 
 ### Testing and Debugging
 ```bash
+# Jest测试框架 (正式测试)
+npm test                # Run Jest test suite
+npm run test:watch      # Run tests in watch mode
+npm run test:coverage  # Run tests with coverage report
+
+# 监控功能调试
 npm run monitor         # Run monitoring task manually to test scraping
 curl http://localhost:{端口}/health    # Check server health
 curl http://localhost:{端口}/api/status  # Get monitoring status
+
+# 独立测试脚本（位于tests/目录）
+node tests/test-email-function.js    # Test email functionality
+node tests/test-summary-report.js    # Test summary report functionality
 ```
+
+**测试架构说明**：
+- **Jest测试框架**：正式的单元测试和集成测试，位于tests/目录
+- **测试文件类型**：支持`*.test.js`和`test-*.js`两种命名模式
+- **测试覆盖**：包含邮件服务、通知设置、集成测试等
+- **独立测试脚本**：可用于调试和验证特定功能的独立脚本
+- **ES模块支持**：Jest配置支持ES6模块语法，使用`--experimental-vm-modules`参数
 
 ### Log Management
 ```bash
@@ -102,6 +134,7 @@ http://localhost:{端口}/api/scrape   # Scraping API
 
 **配置包含**：
 - 服务基础配置（端口、数据目录、CORS等）
+  - **注意**: PORT 必须配置，系统无默认端口值
 - EmailJS 邮件配置（Service ID、Template ID、密钥等）
 - Puppeteer 抓取配置（超时、窗口大小、等待时间等）
 - CoinGlass 网站配置（URL、等待时间、截图目录等）
@@ -110,6 +143,13 @@ http://localhost:{端口}/api/scrape   # Scraping API
 - 日志管理配置（保留天数、自动清理等）
 - 前端配置（更新间隔、API超时等）
 - 监控服务配置（重试次数、冷却时间等）
+
+### Port Configuration
+- Port must be explicitly configured in .env file (no default values)
+- Required configuration: `PORT=<端口号>` in .env file
+- Can be overridden via `-Port` parameter in startup scripts
+- Startup scripts will fail if PORT is not configured
+- Port conflicts are automatically handled by startup scripts
 
 **配置设置命令**：
 ```bash
@@ -120,6 +160,7 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 1. 复制 `.env.example` 为 `.env`
 2. 运行 `npm run setup` 自动配置 Chrome 路径和创建目录
 3. 编辑 `.env` 配置 EMAILJS_PRIVATE_KEY 和其他必要参数
+4. 确保在 `.env` 中配置了 `PORT` 参数（系统无默认端口）
 
 ### 本地存储架构
 本地文件系统存储结构：
@@ -247,10 +288,11 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 ### 脚本说明
 - `scripts/start-windows.ps1` ✅ Windows PowerShell 启动脚本（推荐）
 - `scripts/start-mac.sh` ✅ macOS Bash 启动脚本
-- `scripts/setup-simple.js` 基础配置脚本（自动检测 Chrome 路径）
-- `scripts/setup-windows.js` Windows 特定配置脚本
-- `scripts/setup-mac.js` macOS 特定配置脚本
 - `scripts/cleanup.js` 清理脚本（在package.json中引用）
+
+**注意**:
+- 部署脚本 (`deploy-windows.ps1`, `deploy-mac.sh`) 已被简化为启动脚本
+- 基础配置功能现在通过 `npm run setup` 命令提供
 
 ### 配置文件使用说明
 
@@ -345,9 +387,12 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 
 ### 开发依赖
 - **nodemon**: 开发时自动重启
+- **jest**: 测试框架，支持ES模块
+- **wrangler**: Cloudflare Workers 工具（保留用于兼容性）
 
 ### 架构特点
-- **ES6 模块**: 使用 import/export 语法
+- **ES6 模块**: 使用 import/export 语法，`"type": "module"` 配置
 - **异步编程**: 全面使用 async/await
 - **错误处理**: 完善的 try-catch 和错误传播
 - **模块化设计**: 清晰的服务层和路由层分离
+- **测试架构**: Jest配置支持ES6模块，包含单元测试和集成测试
