@@ -46,33 +46,107 @@ router.post('/coinglass', async (req, res) => {
       });
     }
 
-    // 2. 抓取数据 - 获取所有启用的币种
+    // 2. 按币种独立配置抓取数据 (修复：使用每个币种的独立配置)
     const { ScraperService } = await import('../services/scraper.js');
     const scraper = new ScraperService();
 
-    // 获取所有启用的币种
-    const enabledCoins = config.coins.filter(c => c.enabled).map(c => c.symbol);
-    console.log(`🎯 手动触发币种: ${enabledCoins.join(', ')}`);
+    // 获取所有启用的币种配置
+    const enabledCoins = config.coins.filter(c => c.enabled);
+    console.log(`🎯 手动触发币种及独立配置:`);
+    enabledCoins.forEach(coin => {
+      console.log(`  - ${coin.symbol}: 交易所=${coin.exchange}, 颗粒度=${coin.timeframe}, 阈值=${coin.threshold}%`);
+    });
 
     const startTime = Date.now();
-    const data = await scraper.scrapeCoinGlassData(exchange, coin, timeframe, enabledCoins);
-    const duration = Date.now() - startTime;
+    const allCoinsData = {};
+    const scrapingSummary = [];
 
-    if (!data) {
-      throw new Error('抓取失败，未获取到数据');
+    // 为每个启用的币种独立抓取数据
+    for (const coin of enabledCoins) {
+      try {
+        console.log(`🔄 开始抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
+
+        const coinData = await scraper.scrapeCoinGlassData(
+          coin.exchange || 'binance',  // 使用币种独立配置
+          coin.symbol,                  // 使用币种符号
+          coin.timeframe || '1h',       // 使用币种独立配置
+          [coin.symbol]                 // 只抓取当前币种
+        );
+
+        if (coinData && coinData.coins && coinData.coins[coin.symbol]) {
+          // 合并到总数据中
+          allCoinsData[coin.symbol] = coinData.coins[coin.symbol];
+          console.log(`✅ ${coin.symbol} 数据抓取成功，利率: ${coinData.coins[coin.symbol].annual_rate}%`);
+
+          scrapingSummary.push({
+            symbol: coin.symbol,
+            exchange: coin.exchange,
+            timeframe: coin.timeframe,
+            success: true,
+            rate: coinData.coins[coin.symbol].annual_rate
+          });
+        } else {
+          console.warn(`⚠️ ${coin.symbol} 数据抓取失败`);
+          scrapingSummary.push({
+            symbol: coin.symbol,
+            exchange: coin.exchange,
+            timeframe: coin.timeframe,
+            success: false,
+            error: '数据获取失败'
+          });
+        }
+
+        // 币种间添加短暂延迟，避免请求过于频繁
+        if (enabledCoins.indexOf(coin) < enabledCoins.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+
+      } catch (error) {
+        console.error(`❌ ${coin.symbol} 抓取过程中发生错误:`, error.message);
+        scrapingSummary.push({
+          symbol: coin.symbol,
+          exchange: coin.exchange,
+          timeframe: coin.timeframe,
+          success: false,
+          error: error.message
+        });
+      }
     }
 
-    console.log(`✅ 抓取成功，耗时: ${duration}ms`);
+    const duration = Date.now() - startTime;
+
+    // 构建统一的返回数据结构
+    const data = {
+      exchange: 'mixed', // 表示混合配置
+      timestamp: new Date().toISOString(),
+      coins: allCoinsData,
+      source: 'multi_exchange_manual_scraping',
+      scraping_info: {
+        total_coins_requested: enabledCoins.length,
+        successful_scrapes: Object.keys(allCoinsData).length,
+        failed_scrapes: enabledCoins.length - Object.keys(allCoinsData).length,
+        individual_results: scrapingSummary,
+        triggered_by: 'manual'
+      }
+    };
+
+    if (Object.keys(allCoinsData).length === 0) {
+      throw new Error('所有币种数据抓取失败');
+    }
+
+    console.log(`✅ 多币种数据抓取完成，成功获取 ${Object.keys(allCoinsData).length} 个币种数据，耗时: ${duration}ms`);
+    console.log('📊 抓取摘要:', scrapingSummary.map(r => `${r.symbol}(${r.exchange}/${r.timeframe}):${r.success?'✅':'❌'}`).join(', '));
 
     // 3. 保存抓取结果到历史记录
     await storageService.saveScrapeResult({
-      exchange,
-      coin,
-      timeframe,
+      exchange: 'mixed',
+      coin: enabledCoins.map(c => c.symbol).join(','),
+      timeframe: 'mixed',
       data,
       timestamp: new Date().toISOString(),
       duration,
-      manual: true
+      manual: true,
+      scraping_summary: scrapingSummary
     });
 
     // 4. 执行完整的监控检查流程
@@ -88,11 +162,13 @@ router.post('/coinglass', async (req, res) => {
       meta: {
         timestamp: new Date().toISOString(),
         duration: duration,
-        source: 'coinglass',
-        parameters: { exchange, coin, timeframe },
+        source: 'coinglass_multi_exchange',
         triggered_by: 'manual',
         monitoring_enabled: config.monitoring_enabled,
-        alerts_triggered: monitorResults.alerts_sent || 0
+        alerts_triggered: monitorResults.alerts_sent || 0,
+        scraping_summary: scrapingSummary,
+        total_coins: enabledCoins.length,
+        successful_scrapes: Object.keys(allCoinsData).length
       }
     });
 
@@ -140,7 +216,9 @@ async function runCompleteMonitorCheck(rateData, config) {
         triggeredCoins.push({
           symbol: coin.symbol,
           current_rate: coinResult.current_rate,
-          threshold: coin.threshold
+          threshold: coin.threshold,
+          exchange: coin.exchange,
+          timeframe: coin.timeframe
         });
       } else {
         results.alerts_sent += coinResult.alert_sent ? 1 : 0;

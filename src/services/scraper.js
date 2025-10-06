@@ -147,17 +147,17 @@ export class ScraperService {
       const allCoinsData = {};
 
       for (const targetCoin of coinsToScrape) {
-        console.log(`🔄 切换到币种: ${targetCoin}`);
+        // 为重复币种创建唯一标识符（基于交易所和时间框架）
+        const coinKey = `${targetCoin}_${exchange}_${timeframe}`;
+        console.log(`🔄 切换到币种: ${targetCoin} (标识符: ${coinKey})`);
         await this.switchCoin(page, targetCoin);
         // 等待页面数据更新，特别是切换币种后需要更长时间
         await page.waitForTimeout(this.config.waitTimes.coin);
 
-        // === 切换时间框架 ===
-        if (timeframe === '24h') {
-          console.log(`🔄 切换到时间框架: ${timeframe}`);
-          await this.switchTimeframe(page, timeframe);
-          await page.waitForTimeout(this.config.waitTimes.data);
-        }
+        // === 切换时间框架 (修复：总是执行时间框架切换) ===
+        console.log(`🔄 切换到时间框架: ${timeframe}`);
+        await this.switchTimeframe(page, timeframe);
+        await page.waitForTimeout(this.config.waitTimes.data);
 
         // 验证切换结果
         console.log('🔍 验证切换结果...');
@@ -202,9 +202,38 @@ export class ScraperService {
         const coinData = await this.extractTableData(page, exchange, targetCoin);
 
         if (coinData && coinData.coins) {
-          // 合并数据
-          Object.assign(allCoinsData, coinData.coins);
-          console.log(`✅ ${targetCoin} 数据抓取成功`);
+          // 使用唯一标识符存储数据，处理重复币种
+          const extractedCoinData = coinData.coins[targetCoin];
+          if (extractedCoinData) {
+            // 添加配置信息到数据中
+            extractedCoinData.exchange = exchange;
+            extractedCoinData.timeframe = timeframe;
+            extractedCoinData.coin_key = coinKey;
+
+            // 对于重复币种，使用复合键存储
+            allCoinsData[coinKey] = extractedCoinData;
+
+            // 同时也用原始币种符号存储（用于向后兼容），确保包含历史数据
+            if (!allCoinsData[targetCoin]) {
+              allCoinsData[targetCoin] = { ...extractedCoinData };
+            } else {
+              // 如果已存在，更新历史数据（合并）
+              if (extractedCoinData.history && extractedCoinData.history.length > 0) {
+                if (!allCoinsData[targetCoin].history) {
+                  allCoinsData[targetCoin].history = [];
+                }
+                // 合并历史数据，避免重复
+                const existingTimes = new Set(allCoinsData[targetCoin].history.map(h => h.time));
+                extractedCoinData.history.forEach(h => {
+                  if (!existingTimes.has(h.time)) {
+                    allCoinsData[targetCoin].history.push(h);
+                  }
+                });
+              }
+            }
+
+            console.log(`✅ ${targetCoin} (${coinKey}) 数据抓取成功，利率: ${extractedCoinData.annual_rate}%`);
+          }
         } else {
           console.warn(`⚠️ ${targetCoin} 数据提取失败`);
         }
@@ -219,11 +248,13 @@ export class ScraperService {
         timestamp: new Date().toISOString(),
         coins: allCoinsData,
         page_analysis: {
-          title: `多币种抓取完成 - ${coinsToScrape.length} 个币种`,
+          title: `单交易所抓取完成 - ${coinsToScrape.length} 个币种`,
           current_exchange: exchange,
+          current_timeframe: timeframe,
           total_coins_found: Object.keys(allCoinsData).length,
           requested_coins: coinsToScrape,
-          successfully_scraped: Object.keys(allCoinsData)
+          successfully_scraped: Object.keys(allCoinsData),
+          duplicate_coins_handled: coinsToScrape.length !== Object.keys(allCoinsData).length
         }
       };
 
@@ -800,15 +831,38 @@ export class ScraperService {
    */
   async switchTimeframe(page, timeframe) {
     try {
+      console.log(`🔄 开始切换时间框架到: ${timeframe}`);
+
       // 查找时间框架标签页
       const success = await page.evaluate((targetTimeframe) => {
         const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
-        const targetTab = tabs.find(tab =>
-          tab.textContent.includes(targetTimeframe === '24h' ? '24' : '1')
-        );
+        console.log(`📋 找到 ${tabs.length} 个标签页`);
+
+        // 调试：输出所有标签页的文本
+        tabs.forEach((tab, index) => {
+          console.log(`标签页 ${index}: "${tab.textContent.trim()}"`);
+        });
+
+        // 查找目标标签页 - 增强匹配逻辑
+        const targetTab = tabs.find(tab => {
+          const text = tab.textContent.trim();
+          if (targetTimeframe === '24h') {
+            return text.includes('24') || text.includes('天') || text.includes('Day');
+          } else if (targetTimeframe === '1h') {
+            return text.includes('1') || text.includes('时') || text.includes('Hour') || text.includes('小时');
+          }
+          return false;
+        });
+
+        console.log(`🎯 目标时间框架: ${targetTimeframe}, 找到标签页: ${targetTab ? targetTab.textContent.trim() : '未找到'}`);
 
         if (targetTab) {
+          // 确保标签页可见
+          targetTab.scrollIntoView();
+
+          // 点击标签页
           targetTab.click();
+          console.log(`✅ 已点击时间框架标签页: ${targetTab.textContent.trim()}`);
           return true;
         }
         return false;
@@ -819,10 +873,12 @@ export class ScraperService {
       if (success) {
         console.log(`✅ 成功切换到时间框架: ${timeframe}`);
       } else {
-        console.log(`⚠️ 未找到时间框架选项: ${timeframe}`);
+        console.log(`⚠️ 未找到时间框架选项: ${timeframe}，将使用默认时间框架`);
+        // 不抛出错误，允许继续使用默认时间框架
       }
     } catch (error) {
       console.error('❌ 切换时间框架失败:', error);
+      // 不抛出错误，允许继续使用默认时间框架
     }
   }
 

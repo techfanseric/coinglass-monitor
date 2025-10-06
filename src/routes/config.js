@@ -52,17 +52,29 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // 确保必要字段存在
+    // 验证和标准化币种配置
+    const validatedCoins = Array.isArray(config.coins) ? config.coins.map(coin => ({
+      symbol: coin.symbol || 'USDT',
+      exchange: coin.exchange || 'binance',
+      timeframe: coin.timeframe || '1h',
+      threshold: Number(coin.threshold) || 5.0,
+      enabled: Boolean(coin.enabled !== false), // 默认启用
+      ...coin
+    })) : [];
+
+    // 确保必要字段存在 - 优化配置结构
     const validatedConfig = {
       email: config.email || '',
       monitoring_enabled: Boolean(config.monitoring_enabled),
+      // 保留filters以维持向后兼容，但不再强制使用
       filters: {
         exchange: config.filters?.exchange || 'binance',
         coin: config.filters?.coin || 'USDT',
         timeframe: config.filters?.timeframe || '1h',
         ...config.filters
       },
-      coins: Array.isArray(config.coins) ? config.coins : [],
+      // 使用验证后的币种配置
+      coins: validatedCoins,
       trigger_settings: {
         hourly_minute: Number(config.trigger_settings?.hourly_minute) || 0,
         daily_hour: Number(config.trigger_settings?.daily_hour) || 9,
@@ -75,8 +87,8 @@ router.post('/', async (req, res) => {
         end: config.notification_hours?.end || '24:00',
         ...config.notification_hours
       },
-      repeat_interval: Number(config.repeat_interval) || 3,
-      ...config
+      repeat_interval: Number(config.repeat_interval) || 180, // 修复默认值
+      // 不再使用 ...config 避免覆盖验证逻辑
     };
 
     const success = await storageService.saveConfig(validatedConfig);

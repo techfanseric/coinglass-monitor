@@ -270,7 +270,7 @@ input:checked + .slider:before {
 
 .monitor-info {
     flex: 1;
-    font-size: 0.9em;
+    font-size: 1em;
     line-height: 1.4;
 }
 
@@ -279,10 +279,10 @@ input:checked + .slider:before {
     font-size: 1em;
 }
 
-.monitor-info .timeframe {
+.monitor-info .secondary-info {
     color: #718096;
     font-weight: normal;
-    font-size: 1em;
+    font-size: 0.9em;
 }
 
 .monitor-info small {

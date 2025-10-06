@@ -32,40 +32,128 @@ export async function runMonitoring() {
       return { success: false, reason: 'trigger_time_not_met' };
     }
 
-    loggerService.info(`${logPrefix} 触发条件满足，开始抓取 CoinGlass 数据`);
-    console.log('2. 触发条件满足，开始抓取 CoinGlass 数据...');
+    loggerService.info(`${logPrefix} 触发条件满足，开始按币种独立抓取 CoinGlass 数据`);
+    console.log('2. 触发条件满足，开始按币种独立抓取 CoinGlass 数据...');
 
-    // 3. 抓取数据（获取所有启用的币种）
-    const enabledCoins = config.coins.filter(c => c.enabled).map(c => c.symbol);
-    const filters = config.filters || { exchange: 'binance', coin: 'USDT', timeframe: '1h' };
+    // 3. 按币种独立抓取数据（修复：使用每个币种的独立配置）
+    const enabledCoins = config.coins.filter(c => c.enabled);
+    const allCoinsData = {};
+    const results = [];
 
-    loggerService.info(`${logPrefix} 准备抓取币种: ${enabledCoins.join(', ')}`);
-    console.log(`🎯 准备抓取币种: ${enabledCoins.join(', ')}`);
-    const rateData = await scraperService.scrapeCoinGlassData(
-      filters.exchange,
-      filters.coin,
-      filters.timeframe,
-      enabledCoins
-    );
+    loggerService.info(`${logPrefix} 准备按独立配置抓取币种: ${enabledCoins.map(c => `${c.symbol}(${c.exchange}/${c.timeframe})`).join(', ')}`);
+    console.log(`🎯 准备按独立配置抓取币种:`);
+    enabledCoins.forEach(coin => {
+      console.log(`  - ${coin.symbol}: 交易所=${coin.exchange}, 颗粒度=${coin.timeframe}`);
+    });
 
-    if (!rateData) {
-      loggerService.error(`${logPrefix} 数据抓取失败`);
-      console.error('数据抓取失败');
-      return { success: false, reason: 'scraping_failed' };
+    // 为每个启用的币种独立抓取数据
+    for (const coin of enabledCoins) {
+      try {
+        console.log(`🔄 开始抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
+
+        const coinRateData = await scraperService.scrapeCoinGlassData(
+          coin.exchange || 'binance',  // 使用币种独立配置
+          coin.symbol,                  // 使用币种符号
+          coin.timeframe || '1h',       // 使用币种独立配置
+          [coin.symbol]                 // 只抓取当前币种
+        );
+
+        if (coinRateData && coinRateData.coins && coinRateData.coins[coin.symbol]) {
+          // 使用复合键避免重复币种覆盖
+          const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+          allCoinsData[coinKey] = coinRateData.coins[coin.symbol];
+
+          // 为重复币种创建唯一标识的数据副本
+          const coinDataWithMeta = {
+            ...coinRateData.coins[coin.symbol],
+            exchange: coin.exchange,
+            timeframe: coin.timeframe,
+            coin_key: coinKey,
+            symbol_display: `${coin.symbol} (${coin.timeframe === '24h' ? '24小时' : coin.timeframe})`
+          };
+
+          // 保持原始键以便邮件服务兼容，但只保留一个
+          if (!allCoinsData[coin.symbol]) {
+            allCoinsData[coin.symbol] = coinDataWithMeta;
+          }
+
+          console.log(`✅ ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据抓取成功，利率: ${coinRateData.coins[coin.symbol].annual_rate}%`);
+
+          // 检查阈值
+          const result = await checkCoinThreshold(coin, coinRateData, config);
+          results.push(result);
+        } else {
+          console.warn(`⚠️ ${coin.symbol} 数据抓取失败，跳过阈值检查`);
+          results.push({
+            coin: coin.symbol,
+            success: false,
+            reason: 'scraping_failed',
+            currentRate: null
+          });
+        }
+
+        // 币种间添加短暂延迟，避免请求过于频繁
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+      } catch (error) {
+        console.error(`❌ ${coin.symbol} 抓取过程中发生错误:`, error.message);
+        results.push({
+          coin: coin.symbol,
+          success: false,
+          reason: 'scraping_error',
+          error: error.message
+        });
+      }
     }
 
-    loggerService.info(`${logPrefix} 数据抓取成功，开始检查阈值，使用筛选器: ${JSON.stringify(filters)}`);
-    console.log('3. 数据抓取成功，开始检查阈值...');
-    console.log('使用筛选器:', filters);
+    // 构建统一的返回数据结构
+    const combinedRateData = {
+      exchange: 'mixed', // 表示混合配置
+      timestamp: new Date().toISOString(),
+      coins: allCoinsData,
+      source: 'multi_exchange_scraping',
+      scraping_info: {
+        total_coins_requested: enabledCoins.length,
+        successful_scrapes: Object.keys(allCoinsData).length,
+        failed_scrapes: enabledCoins.length - Object.keys(allCoinsData).length,
+        individual_configs: enabledCoins.map(c => {
+        const coinData = allCoinsData[c.symbol];
+        const coinKey = `${c.symbol}_${c.exchange}_${c.timeframe}`;
+        // 尝试从复合键获取数据，如果没有则从简单键获取
+        const actualData = allCoinsData[coinKey] || allCoinsData[c.symbol];
 
-    // 4. 检查每个币种的阈值
-    const results = [];
+        return {
+          symbol: c.symbol,
+          exchange: c.exchange,
+          timeframe: c.timeframe,
+          success: !!actualData,
+          rate: actualData?.annual_rate || null
+        };
+      })
+      }
+    };
+
+    if (Object.keys(allCoinsData).length === 0) {
+      loggerService.error(`${logPrefix} 所有币种数据抓取失败`);
+      console.error('所有币种数据抓取失败');
+      return { success: false, reason: 'all_scraping_failed' };
+    }
+
+    loggerService.info(`${logPrefix} 多币种数据抓取完成，成功获取 ${Object.keys(allCoinsData).length} 个币种数据`);
+    console.log('3. 多币种数据抓取完成，开始阈值检查...');
+    console.log('抓取详情:', combinedRateData.scraping_info);
+
+      // 4. 检查每个币种的阈值（传递完整的抓取信息）
     for (const coin of config.coins.filter(c => c.enabled)) {
-      const result = await checkCoinThreshold(coin, rateData, config);
+      // 为每个币种创建单独的rateData对象
+      const coinRateData = {
+        ...combinedRateData,
+        coins: allCoinsData,
+        scraping_info: combinedRateData.scraping_info
+      };
+      const result = await checkCoinThreshold(coin, coinRateData, config);
       results.push(result);
     }
-
-    console.log('4. 阈值检查完成');
 
     // 5. 检查是否有待发送的通知
     await checkPendingNotifications(config);
@@ -73,10 +161,10 @@ export async function runMonitoring() {
     return {
       success: true,
       data: {
-        filters,
-        rateData,
+        rateData: combinedRateData,
         results,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        scraping_summary: combinedRateData.scraping_info
       }
     };
 

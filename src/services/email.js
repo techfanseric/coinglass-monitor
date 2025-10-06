@@ -16,6 +16,35 @@ const emailConfig = {
 };
 
 /**
+ * 获取币种历史数据（支持多交易所、多时间框架）
+ */
+function getCoinHistory(coinsData, coin, config) {
+  // 尝试多种方式获取历史数据
+
+  // 1. 首先尝试直接匹配币种符号
+  let history = coinsData[coin.symbol]?.history || [];
+  if (history.length > 0) {
+    return history;
+  }
+
+  // 2. 尝试查找匹配的复合键（交易所+时间框架）
+  const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+  history = coinsData[coinKey]?.history || [];
+  if (history.length > 0) {
+    return history;
+  }
+
+  // 3. 遍历所有数据，查找匹配的币种（不考虑交易所和时间框架）
+  for (const [key, data] of Object.entries(coinsData)) {
+    if (data.symbol === coin.symbol && data.history && data.history.length > 0) {
+      return data.history;
+    }
+  }
+
+  return [];
+}
+
+/**
  * 计算下次检查时间
  */
 function calculateNextCheckTime(config) {
@@ -43,8 +72,11 @@ function generateMonitoringSettingsInfo(config) {
   // 获取启用的币种数量
   const enabledCoinsCount = coins.filter(coin => coin.enabled).length;
 
-  // 获取交易所信息（去重）
-  const exchanges = [...new Set(coins.map(coin => coin.exchange))];
+  // 获取交易所信息（去重，确保显示所有配置的交易所）
+  const exchanges = [...new Set(coins.map(coin => coin.exchange || 'binance').filter(Boolean))];
+
+  // 如果有多个交易所，显示为"多交易所监控"
+  const exchangeDisplay = exchanges.length > 1 ? '多交易所监控' : exchanges[0] || 'CoinGlass';
 
   // 生成触发时间描述
   const triggerDescriptions = [];
@@ -69,7 +101,8 @@ function generateMonitoringSettingsInfo(config) {
   }
 
   return {
-    exchanges: exchanges.join(', '),
+    exchanges: exchangeDisplay,
+    exchanges_detail: exchanges.join(', '), // 保留详细信息用于调试
     trigger_times: triggerDescriptions.join(', ') || '未设置',
     enabled_coins_count: enabledCoinsCount,
     total_coins_count: coins.length,
@@ -97,7 +130,7 @@ export async function sendAlert(env, coin, currentRate, rateData, config) {
       email: config.email,
       exchange: rateData.exchange,
       detection_time: new Date().toLocaleString('zh-CN'),
-      history: rateData.coins[coin.symbol]?.history || [],
+      history: getCoinHistory(rateData.coins, coin, config),
       all_coins: rateData.coins
     };
 
@@ -204,45 +237,267 @@ export async function sendTestEmail(email) {
  * 准备警报邮件数据
  */
 function prepareAlertEmail(alertData, env, config = null) {
-  // 构建触发币种数组（包含所有超过阈值的币种）- 使用与内容生成相同的逻辑
-  const triggeredCoins = Object.entries(alertData.all_coins)
-    .filter(([symbol, data]) => {
-      // 查找该币种在配置中的阈值
-      const coinConfig = config.coins?.find(c => c.symbol === symbol);
-      const threshold = coinConfig ? coinConfig.threshold : alertData.threshold;
-      return data.annual_rate > threshold;
-    })
-    .map(([symbol, data]) => {
-      // 查找该币种在配置中的阈值
-      const coinConfig = config.coins?.find(c => c.symbol === symbol);
-      const threshold = coinConfig ? coinConfig.threshold : alertData.threshold;
+  // 检查是否有抓取摘要信息（来自多交易所抓取）
+  const scrapingSummary = alertData.scraping_summary || alertData.data?.scraping_info?.individual_results || [];
 
-      // 计算每个币种的超出百分比（使用自己的阈值）
-      const coinExcess = ((data.annual_rate - threshold) / threshold * 100).toFixed(emailConfig.percentageDecimalPlaces);
-      // 获取该币种的历史数据
-      const coinHistory = alertData.all_coins[symbol]?.history || [];
+  // 如果有抓取摘要，使用独立的抓取结果
+  if (scrapingSummary.length > 0) {
+    console.log(`📧 使用多交易所抓取数据准备邮件，共 ${scrapingSummary.length} 个独立结果`);
 
-      return {
-        symbol: symbol,
-        current_rate: data.annual_rate.toFixed(emailConfig.currencyDecimalPlaces),
-        threshold: threshold.toFixed(emailConfig.currencyDecimalPlaces), // 使用该币种自己的阈值
-        excess: coinExcess,
-        daily_rate: (data.annual_rate / 365).toFixed(emailConfig.currencyDecimalPlaces),
-        hourly_rate: (data.annual_rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces),
-        history: coinHistory.slice(0, 5).map(h => {
-          // 提取时间中的小时和分钟部分，去掉日期
-          const timeMatch = h.time.match(/(\d{1,2}:\d{2})/);
-          const timeStr = timeMatch ? timeMatch[1] : h.time;
-          return {
-            time: timeStr,
-            rate: h.annual_rate ? h.annual_rate.toFixed(emailConfig.currencyDecimalPlaces) : 'N/A',
-            daily_rate: h.annual_rate ? (h.annual_rate / 365).toFixed(emailConfig.currencyDecimalPlaces) : 'N/A',
-            hourly_rate: h.annual_rate ? (h.annual_rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces) : 'N/A'
-          };
-        })
-      };
-    })
-    .sort((a, b) => parseFloat(b.current_rate) - parseFloat(a.current_rate)); // 按利率从高到低排序
+    const triggeredCoins = scrapingSummary
+      .filter(result => {
+        if (!result.success) return false;
+
+        // 查找该币种在配置中的信息
+        const coinConfig = config.coins?.find(c =>
+          c.symbol === result.symbol &&
+          c.exchange === result.exchange &&
+          c.timeframe === result.timeframe
+        );
+        const threshold = coinConfig ? coinConfig.threshold : alertData.threshold;
+
+        // 检查是否超过阈值
+        return result.rate > threshold;
+      })
+      .map(result => {
+        // 查找该币种在配置中的信息
+        const coinConfig = config.coins?.find(c =>
+          c.symbol === result.symbol &&
+          c.exchange === result.exchange &&
+          c.timeframe === result.timeframe
+        );
+        const threshold = coinConfig ? coinConfig.threshold : alertData.threshold;
+
+        // 计算超出百分比
+        const coinExcess = ((result.rate - threshold) / threshold * 100).toFixed(emailConfig.percentageDecimalPlaces);
+
+        // 格式化交易所和时间框架显示
+        const exchangeDisplay = result.exchange.charAt(0).toUpperCase() + result.exchange.slice(1);
+        const timeframeDisplay = result.timeframe === '1h' ? '1小时' : result.timeframe === '24h' ? '24小时' : result.timeframe;
+
+        // 构建币种信息用于历史数据获取
+        const coinInfo = {
+          symbol: result.symbol,
+          exchange: result.exchange,
+          timeframe: result.timeframe
+        };
+
+        // 获取历史数据
+        const coinHistory = getCoinHistory(alertData.all_coins, coinInfo, config);
+
+        return {
+          symbol: result.symbol,
+          current_rate: result.rate.toFixed(emailConfig.currencyDecimalPlaces),
+          threshold: threshold.toFixed(emailConfig.currencyDecimalPlaces),
+          excess: coinExcess,
+          daily_rate: (result.rate / 365).toFixed(emailConfig.currencyDecimalPlaces),
+          hourly_rate: (result.rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces),
+          exchange_name: exchangeDisplay,
+          timeframe: timeframeDisplay,
+          exchange: result.exchange,
+          timeframe_original: result.timeframe,
+          history: coinHistory.slice(0, 5).map(h => {
+            const timeMatch = h.time ? h.time.match(/(\d{1,2}:\d{2})/) : null;
+            const timeStr = timeMatch ? timeMatch[1] : (h.time || 'N/A');
+            const rate = h.annual_rate || h.rate || 0;
+            return {
+              time: timeStr,
+              rate: rate.toFixed(emailConfig.currencyDecimalPlaces),
+              daily_rate: (rate / 365).toFixed(emailConfig.currencyDecimalPlaces),
+              hourly_rate: (rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces)
+            };
+          })
+        };
+      })
+      .sort((a, b) => parseFloat(b.current_rate) - parseFloat(a.current_rate));
+
+    // 构建所有币种状态
+    const allCoinsStatus = scrapingSummary
+      .filter(result => result.success)
+      .map(result => {
+        const coinConfig = config.coins?.find(c => c.symbol === result.symbol);
+        const threshold = coinConfig ? coinConfig.threshold : alertData.threshold;
+
+        return {
+          symbol: result.symbol,
+          annual_rate: result.rate.toFixed(emailConfig.currencyDecimalPlaces),
+          threshold: threshold.toFixed(emailConfig.currencyDecimalPlaces),
+          is_above_threshold: result.rate > threshold,
+          exchange_info: `${result.exchange.charAt(0).toUpperCase() + result.exchange.slice(1)} (${result.timeframe})`
+        };
+      });
+
+    // 继续构建其他部分...
+    const maxCoinsInTitle = 4;
+    const coinSummaries = triggeredCoins.slice(0, maxCoinsInTitle).map(coin => `${coin.symbol}(${coin.current_rate}%)`).join(' ');
+    const title = `${new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })} | ${coinSummaries}${triggeredCoins.length > maxCoinsInTitle ? '...' : ''}`;
+
+    const monitoringSettings = generateMonitoringSettingsInfo(config);
+
+    return {
+      service_id: env.EMAILJS_SERVICE_ID,
+      template_id: env.EMAILJS_TEMPLATE_ID,
+      user_id: env.EMAILJS_PUBLIC_KEY,
+      template_params: {
+        to_email: alertData.email,
+        subject: title,
+        exchange_name: alertData.exchange,
+        detection_time: alertData.detection_time,
+        triggered_count: triggeredCoins.length,
+        triggered_coins: triggeredCoins,
+        all_coins_status: allCoinsStatus,
+        total_coins: scrapingSummary.filter(r => r.success).length,
+        check_interval: '每小时',
+        next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN'),
+        exchanges_display: monitoringSettings.exchanges,
+        exchanges_detail: monitoringSettings.exchanges_detail,
+        monitoring_settings: monitoringSettings
+      }
+    };
+  }
+
+  // 优先使用抓取摘要数据（支持重复币种），回退到原始逻辑（用于兼容性）
+  console.log(`✅ 使用抓取摘要数据构建触发币种列表（支持重复币种），scrapingSummary长度: ${scrapingSummary?.length || 0}`);
+
+  // 构建触发币种数组（基于抓取摘要，支持重复币种的不同配置）
+  let triggeredCoins = [];
+
+  if (scrapingSummary && scrapingSummary.length > 0) {
+    // 使用抓取摘要数据，支持重复币种的不同配置
+    triggeredCoins = scrapingSummary
+      .filter(result => result.success && result.rate !== null)
+      .map(result => {
+        // 查找该币种在配置中的详细信息
+        const coinKey = `${result.symbol}_${result.exchange}_${result.timeframe}`;
+        const coinConfig = config.coins?.find(c =>
+          c.symbol === result.symbol &&
+          c.exchange === result.exchange &&
+          c.timeframe === result.timeframe
+        );
+
+        // 如果找不到精确匹配，尝试按symbol匹配
+        const fallbackCoinConfig = coinConfig || config.coins?.find(c => c.symbol === result.symbol);
+        const threshold = coinConfig ? coinConfig.threshold : (fallbackCoinConfig ? fallbackCoinConfig.threshold : alertData.threshold);
+
+        // 检查是否超过阈值
+        if (result.rate <= threshold) {
+          return null; // 未超过阈值，不包含在触发列表中
+        }
+
+        // 计算超出百分比
+        const coinExcess = ((result.rate - threshold) / threshold * 100).toFixed(emailConfig.percentageDecimalPlaces);
+
+        // 获取历史数据 - 优先从抓取摘要中获取，否则从all_coins获取
+        let coinHistory = [];
+
+        // 使用新的历史数据获取函数
+        const coinInfo = {
+          symbol: result.symbol,
+          exchange: result.exchange,
+          timeframe: result.timeframe
+        };
+        coinHistory = getCoinHistory(alertData.all_coins, coinInfo, config);
+
+        // 格式化显示名称
+        const exchangeDisplay = result.exchange.charAt(0).toUpperCase() + result.exchange.slice(1);
+        const timeframeDisplay = result.timeframe === '1h' ? '1小时' : result.timeframe === '24h' ? '24小时' : result.timeframe;
+
+        // 如果是重复币种，添加标识区分
+        const coinConfigs = config.coins?.filter(c => c.symbol === result.symbol) || [];
+        const isDuplicateCoin = coinConfigs.length > 1;
+        const symbolDisplay = isDuplicateCoin
+          ? `${result.symbol} (${timeframeDisplay})`
+          : result.symbol;
+
+        const coinData = {
+          symbol: symbolDisplay,
+          original_symbol: result.symbol,
+          current_rate: result.rate.toFixed(emailConfig.currencyDecimalPlaces),
+          threshold: threshold.toFixed(emailConfig.currencyDecimalPlaces),
+          excess: coinExcess,
+          daily_rate: (result.rate / 365).toFixed(emailConfig.currencyDecimalPlaces),
+          hourly_rate: (result.rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces),
+          exchange_name: exchangeDisplay,
+          timeframe: timeframeDisplay,
+          history: coinHistory.slice(0, 5).map(h => {
+            const timeMatch = h.time ? h.time.match(/(\d{1,2}:\d{2})/) : null;
+            const timeStr = timeMatch ? timeMatch[1] : (h.time || 'N/A');
+            const rate = h.annual_rate || h.rate || 0; // 支持两种字段名
+            return {
+              time: timeStr,
+              rate: rate.toFixed(emailConfig.currencyDecimalPlaces),
+              daily_rate: (rate / 365).toFixed(emailConfig.currencyDecimalPlaces),
+              hourly_rate: (rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces)
+            };
+          })
+        };
+
+        // 调试日志：检查每个币种的历史数据（第一个分支）
+        console.log(`🔧 邮件数据调试-分支1 ${symbolDisplay} (${result.exchange}/${result.timeframe}):`);
+        console.log(`  - 历史数据原始数量: ${coinHistory.length}`);
+        console.log(`  - 格式化后历史数据数量: ${coinData.history.length}`);
+        console.log(`  - 历史数据样例:`, coinData.history[0]);
+
+        return coinData;
+      })
+      .filter(coin => coin !== null) // 过滤掉未超过阈值的币种
+      .sort((a, b) => parseFloat(b.current_rate) - parseFloat(a.current_rate));
+  } else {
+    // 回退到原始逻辑
+    console.log('⚠️ 抓取摘要数据不可用，回退到原始邮件数据准备逻辑');
+    triggeredCoins = Object.entries(alertData.all_coins || {})
+      .filter(([symbol, data]) => {
+        const coinConfig = config.coins?.find(c => c.symbol === symbol);
+        const threshold = coinConfig ? coinConfig.threshold : alertData.threshold;
+        return data.annual_rate > threshold;
+      })
+      .map(([symbol, data]) => {
+        const coinConfig = config.coins?.find(c => c.symbol === symbol);
+        const threshold = coinConfig ? coinConfig.threshold : alertData.threshold;
+        const coinExcess = ((data.annual_rate - threshold) / threshold * 100).toFixed(emailConfig.percentageDecimalPlaces);
+        const coinInfo = {
+          symbol: symbol,
+          exchange: data.exchange || coinConfig?.exchange || '未知',
+          timeframe: data.timeframe || coinConfig?.timeframe || '1h'
+        };
+        const coinHistory = getCoinHistory(alertData.all_coins, coinInfo, config);
+        const exchange = data.exchange || coinConfig?.exchange || '未知';
+        const timeframe = data.timeframe || coinConfig?.timeframe || '1h';
+        const exchangeDisplay = exchange.charAt(0).toUpperCase() + exchange.slice(1);
+        const timeframeDisplay = timeframe === '1h' ? '1小时' : timeframe === '24h' ? '24小时' : timeframe;
+
+        const coinData = {
+          symbol: symbol,
+          current_rate: data.annual_rate.toFixed(emailConfig.currencyDecimalPlaces),
+          threshold: threshold.toFixed(emailConfig.currencyDecimalPlaces),
+          excess: coinExcess,
+          daily_rate: (data.annual_rate / 365).toFixed(emailConfig.currencyDecimalPlaces),
+          hourly_rate: (data.annual_rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces),
+          exchange_name: exchangeDisplay,
+          timeframe: timeframeDisplay,
+          history: coinHistory.slice(0, 5).map(h => {
+            const timeMatch = h.time ? h.time.match(/(\d{1,2}:\d{2})/) : null;
+            const timeStr = timeMatch ? timeMatch[1] : (h.time || 'N/A');
+            const rate = h.annual_rate || h.rate || 0; // 支持两种字段名
+            return {
+              time: timeStr,
+              rate: rate.toFixed(emailConfig.currencyDecimalPlaces),
+              daily_rate: (rate / 365).toFixed(emailConfig.currencyDecimalPlaces),
+              hourly_rate: (rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces)
+            };
+          })
+        };
+
+        // 调试日志：检查每个币种的历史数据
+        console.log(`🔧 邮件数据调试 ${symbol} (${exchange}/${timeframe}):`);
+        console.log(`  - 历史数据原始数量: ${coinHistory.length}`);
+        console.log(`  - 格式化后历史数据数量: ${coinData.history.length}`);
+        console.log(`  - 历史数据样例:`, coinData.history[0]);
+
+        return coinData;
+      })
+      .sort((a, b) => parseFloat(b.current_rate) - parseFloat(a.current_rate));
+  }
 
   // 生成标题：时间 | 币种1(利率1) 币种2(利率2) ...
   // 使用与内容相同的触发币种列表，确保一致性
@@ -250,19 +505,64 @@ function prepareAlertEmail(alertData, env, config = null) {
   const coinSummaries = triggeredCoins.slice(0, maxCoinsInTitle).map(coin => `${coin.symbol}(${coin.current_rate}%)`).join(' ');
   const title = `${new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })} | ${coinSummaries}${triggeredCoins.length > maxCoinsInTitle ? '...' : ''}`;
 
-  // 构建所有币种状态数组
-  const allCoinsStatus = Object.entries(alertData.all_coins).map(([symbol, data]) => {
-    // 查找该币种在配置中的阈值
-    const coinConfig = config.coins?.find(c => c.symbol === symbol);
-    const threshold = coinConfig ? coinConfig.threshold : alertData.threshold;
+  // 构建所有币种状态数组（支持重复币种）
+  let allCoinsStatus = [];
 
-    return {
-      symbol: symbol,
-      annual_rate: data.annual_rate.toFixed(emailConfig.currencyDecimalPlaces),
-      threshold: threshold.toFixed(emailConfig.currencyDecimalPlaces), // 使用该币种自己的阈值
-      is_above_threshold: data.annual_rate > threshold
-    };
-  });
+  if (scrapingSummary && scrapingSummary.length > 0) {
+    // 使用抓取摘要数据，支持重复币种的不同配置
+    allCoinsStatus = scrapingSummary
+      .filter(result => result.success && result.rate !== null)
+      .map(result => {
+        // 查找该币种在配置中的详细信息
+        const coinConfig = config.coins?.find(c =>
+          c.symbol === result.symbol &&
+          c.exchange === result.exchange &&
+          c.timeframe === result.timeframe
+        );
+
+        // 如果找不到精确匹配，尝试按symbol匹配
+        const fallbackCoinConfig = coinConfig || config.coins?.find(c => c.symbol === result.symbol);
+        const threshold = coinConfig ? coinConfig.threshold : (fallbackCoinConfig ? fallbackCoinConfig.threshold : alertData.threshold);
+
+        // 格式化显示名称
+        const exchangeDisplay = result.exchange.charAt(0).toUpperCase() + result.exchange.slice(1);
+        const timeframeDisplay = result.timeframe === '1h' ? '1小时' : result.timeframe === '24h' ? '24小时' : result.timeframe;
+
+        // 如果是重复币种，添加标识区分
+        const coinConfigs = config.coins?.filter(c => c.symbol === result.symbol) || [];
+        const isDuplicateCoin = coinConfigs.length > 1;
+        const symbolDisplay = isDuplicateCoin
+          ? `${result.symbol} (${timeframeDisplay})`
+          : result.symbol;
+
+        return {
+          symbol: symbolDisplay,
+          annual_rate: result.rate.toFixed(emailConfig.currencyDecimalPlaces),
+          threshold: threshold.toFixed(emailConfig.currencyDecimalPlaces),
+          is_above_threshold: result.rate > threshold,
+          exchange_info: `${exchangeDisplay} (${timeframeDisplay})`
+        };
+      })
+      .sort((a, b) => a.symbol.localeCompare(b.symbol)); // 按币种名称排序
+  } else {
+    // 回退到原始逻辑
+    console.log('⚠️ 抓取摘要数据不可用，回退到原始状态表格逻辑');
+    allCoinsStatus = Object.entries(alertData.all_coins || {}).map(([symbol, data]) => {
+      const coinConfig = config.coins?.find(c => c.symbol === symbol);
+      const threshold = coinConfig ? coinConfig.threshold : alertData.threshold;
+      const exchange = data.exchange || coinConfig?.exchange || '未知';
+      const timeframe = data.timeframe || coinConfig?.timeframe || '1h';
+      const exchangeDisplay = exchange.charAt(0).toUpperCase() + exchange.slice(1);
+
+      return {
+        symbol: symbol,
+        annual_rate: data.annual_rate.toFixed(emailConfig.currencyDecimalPlaces),
+        threshold: threshold.toFixed(emailConfig.currencyDecimalPlaces),
+        is_above_threshold: data.annual_rate > threshold,
+        exchange_info: `${exchangeDisplay} (${timeframe})`
+      };
+    });
+  }
 
   // 生成完整的监控设置信息
   const monitoringSettings = generateMonitoringSettingsInfo(config);
@@ -280,9 +580,12 @@ function prepareAlertEmail(alertData, env, config = null) {
       triggered_count: triggeredCoins.length,
       triggered_coins: triggeredCoins,
       all_coins_status: allCoinsStatus,
-      total_coins: Object.keys(alertData.all_coins).length,
+      total_coins: allCoinsStatus.length,
       check_interval: '每小时',
       next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN'),
+      // 交易所和时间框架信息
+      exchanges_display: monitoringSettings.exchanges,
+      exchanges_detail: monitoringSettings.exchanges_detail,
       // 完整的监控设置信息
       monitoring_settings: monitoringSettings
     }
@@ -342,6 +645,9 @@ function prepareRecoveryEmail(recoveryData, env, config = null) {
       total_coins: 1,
       check_interval: '每小时',
       next_check_time: calculateNextCheckTime(config).toLocaleString('zh-CN'),
+      // 交易所和时间框架信息
+      exchanges_display: monitoringSettings.exchanges,
+      exchanges_detail: monitoringSettings.exchanges_detail,
       // 完整的监控设置信息
       monitoring_settings: monitoringSettings
     }
@@ -457,6 +763,8 @@ async function sendEmailJS(env, emailData) {
  */
 export async function sendMultiCoinAlert(triggeredCoins, rateData, config) {
   console.log(`发送多币种警报: ${triggeredCoins.length} 个币种触发阈值`);
+  console.log(`🔍 调试: rateData.scraping_info存在? ${!!rateData.scraping_info}`);
+  console.log(`🔍 调试: individual_results长度: ${rateData.scraping_info?.individual_results?.length || 0}`);
 
   try {
     const alertData = {
@@ -479,6 +787,9 @@ export async function sendMultiCoinAlert(triggeredCoins, rateData, config) {
     };
 
     // 构建类似单币种的alertData结构，但包含所有触发币种
+    const scrapingSummary = rateData.scraping_info?.individual_results || [];
+    console.log(`🔧 修复调试: scrapingSummary长度=${scrapingSummary.length}, rateData.scraping_info存在=${!!rateData.scraping_info}`);
+
     const unifiedAlertData = {
       type: 'alert',
       coin: primaryCoin.symbol, // 主要币种
@@ -488,8 +799,13 @@ export async function sendMultiCoinAlert(triggeredCoins, rateData, config) {
       email: alertData.email,
       exchange: alertData.exchange,
       detection_time: alertData.detection_time,
-      history: rateData.coins[primaryCoin.symbol]?.history || [],
-      all_coins: rateData.coins // 关键：包含所有币种数据
+      history: getCoinHistory(rateData.coins, primaryCoin, config),
+      all_coins: rateData.coins, // 关键：包含所有币种数据
+      // 修复：确保抓取摘要数据正确传递
+      scraping_summary: scrapingSummary,
+      // 添加完整的抓取信息
+      scraping_info: rateData.scraping_info,
+      data: rateData // 传递完整的rateData作为备用
     };
 
     const emailData = prepareAlertEmail(unifiedAlertData, env, config); // 传递config参数
@@ -521,4 +837,4 @@ export const emailService = {
 };
 
 // 导出测试用的函数
-export { generateMonitoringSettingsInfo };
+export { generateMonitoringSettingsInfo, getCoinHistory, prepareAlertEmail };

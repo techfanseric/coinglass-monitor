@@ -288,14 +288,19 @@
                     }
                 }
 
-                // 判断是否显示冷却期重置选项（只有在冷却中状态时显示）
-                const showCooldownOption = state.status !== 'alert' && state.status !== 'normal';
+                // 判断是否显示冷却期重置选项（只有在警报状态且还在冷却期内时显示）
+                const isInCooldown = state.status === 'alert' && state.next_notification && new Date(state.next_notification) > new Date();
+                const showCooldownOption = isInCooldown;
+
+                // 显示配置信息
+                const exchangeDisplay = coin.exchange || 'binance';
+                const timeframeDisplay = timeframeText;
 
                 html += '<div class="monitor-item">' +
                         '<div class="monitor-info">' +
-                            '<strong>' + coin.exchange + ' - ' + coin.symbol + '</strong>' +
+                            '<strong>' + exchangeDisplay + ' - ' + coin.symbol + '</strong>' +
                             '<div class="secondary-info">' +
-                            '阈值: ' + coin.threshold + '% | 颗粒度: ' + timeframeText +
+                            '阈值: ' + coin.threshold + '% | 颗粒度: ' + timeframeDisplay +
                             nextNotificationText +
                         '</div>' +
                         '</div>' +
