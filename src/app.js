@@ -644,70 +644,207 @@ function startDataCleanup() {
 
 // Git自动更新（仅在脚本启动模式下明确启用）
 function startGitAutoUpdate() {
-  // 只有明确启用自动更新时才启动（防止误操作）
-  if (process.env.ENABLE_AUTO_UPDATE !== 'true') {
+  // 检查是否启用自动更新（支持true或Git仓库地址）
+  const autoUpdateConfig = process.env.ENABLE_AUTO_UPDATE;
+  if (!autoUpdateConfig || autoUpdateConfig === 'false') {
     return; // 静默跳过，这是默认安全设置
   }
 
   console.log('🔄 启动Git自动更新...');
 
   // 检查是否为Git仓库
+  let isGitRepo = false;
   try {
-    const isGitRepo = spawn('git', ['rev-parse', '--git-dir'], { stdio: 'ignore' });
-    if (isGitRepo.status !== 0) {
-      console.log('⚠️  非Git仓库，跳过自动更新');
-      return;
+    const isGitRepoCheck = spawn('git', ['rev-parse', '--git-dir'], { stdio: 'ignore', shell: true });
+    if (isGitRepoCheck.status === 0) {
+      isGitRepo = true;
     }
-  } catch {
-    console.log('⚠️  Git检查失败，跳过自动更新');
+  } catch (error) {
+    // Git检查失败，继续尝试备用方案
+  }
+
+  // 如果不是Git仓库但配置了Git地址，使用备用更新方案
+  if (!isGitRepo && autoUpdateConfig !== 'true' && autoUpdateConfig.startsWith('http')) {
+    console.log('📦 检测到非Git仓库，使用ZIP自动更新方案...');
+    startZipAutoUpdate(autoUpdateConfig);
+    return;
+  }
+
+  if (!isGitRepo) {
+    console.log('⚠️  非Git仓库且未配置Git地址，跳过自动更新');
+    console.log('💡 提示：设置 ENABLE_AUTO_UPDATE=https://github.com/user/repo.git 启用ZIP自动更新');
     return;
   }
 
   // 每5分钟检查一次更新
-  setInterval(async () => {
-    try {
-      const gitStatus = spawn('git', ['status', '--porcelain'], { stdio: 'pipe' });
-      if (gitStatus.status !== 0) return;
+  setInterval(() => {
+    (async () => {
+      try {
+        // 检查工作目录状态
+        const gitStatus = spawn('git', ['status', '--porcelain'], { stdio: 'pipe', shell: true });
+        if (gitStatus.status !== 0) return;
 
-      // 检查远程更新
-      const fetchResult = spawn('git', ['fetch'], { stdio: 'ignore' });
-      if (fetchResult.status !== 0) return;
+        // 检查远程更新
+        const fetchResult = spawn('git', ['fetch', 'origin'], { stdio: 'pipe', shell: true });
+        if (fetchResult.status !== 0) return;
 
-      const localCommit = spawn('git', ['rev-parse', 'HEAD'], { stdio: 'pipe' });
-      const remoteCommit = spawn('git', ['rev-parse', 'origin/main'], { stdio: 'pipe' });
+        // 等待fetch完成
+        await new Promise(resolve => {
+          fetchResult.on('close', resolve);
+        });
 
-      if (localCommit.status === 0 && remoteCommit.status === 0) {
-        const local = localCommit.stdout.toString().trim();
-        const remote = remoteCommit.stdout.toString().trim();
+        const localCommit = spawn('git', ['rev-parse', 'HEAD'], { stdio: 'pipe', shell: true });
+        const remoteCommit = spawn('git', ['rev-parse', 'origin/main'], { stdio: 'pipe', shell: true });
 
-        if (local !== remote) {
-          console.log('🔄 发现新版本，开始更新...');
+        if (localCommit.status === 0 && remoteCommit.status === 0) {
+          const local = localCommit.stdout.toString().trim();
+          const remote = remoteCommit.stdout.toString().trim();
 
-          // 创建完整备份（配置和状态）
-          try {
-            const { storageService } = await import('./services/storage.js');
-            const backupPath = await storageService.backup();
-            if (backupPath) {
-              console.log(`✅ 更新前备份已创建: ${backupPath}`);
+          if (local !== remote) {
+            console.log('🔄 发现新版本，开始更新...');
+
+            // 创建完整备份（配置和状态）
+            try {
+              const { storageService } = await import('./services/storage.js');
+              const backupPath = await storageService.backup();
+              if (backupPath) {
+                console.log(`✅ 更新前备份已创建: ${backupPath}`);
+              }
+            } catch (error) {
+              console.warn('⚠️  更新前备份失败:', error.message);
             }
-          } catch (error) {
-            console.warn('⚠️  更新前备份失败:', error.message);
-          }
 
-          // 拉取更新
-          const pullResult = spawn('git', ['pull'], { stdio: 'inherit' });
-          if (pullResult.status === 0) {
-            console.log('✅ 更新完成，服务将在5秒后重启...');
-            setTimeout(() => {
-              process.exit(0); // 进程管理器会自动重启
-            }, 5000);
+            // 拉取更新 - 使用pipe避免Windows控制台问题
+            console.log('📥 正在拉取最新代码...');
+            const pullResult = spawn('git', ['pull'], { stdio: 'pipe', shell: true });
+
+            pullResult.stdout.on('data', (data) => {
+              console.log(data.toString().trim());
+            });
+
+            pullResult.stderr.on('data', (data) => {
+              console.error('Git错误:', data.toString().trim());
+            });
+
+            pullResult.on('close', (code) => {
+              if (code === 0) {
+                console.log('✅ 更新完成，服务将在5秒后重启...');
+                setTimeout(() => {
+                  process.exit(0); // 进程管理器会自动重启
+                }, 5000);
+              } else {
+                console.error('❌ Git拉取失败，退出代码:', code);
+              }
+            });
           }
         }
+      } catch (error) {
+        console.log('⚠️  自动更新检查失败:', error.message);
       }
+    })();
+  }, 5 * 60 * 1000); // 5分钟
+}
+
+// ZIP自动更新功能（用于非Git仓库部署）
+function startZipAutoUpdate(gitRepoUrl) {
+  console.log(`📦 ZIP自动更新已启用，仓库: ${gitRepoUrl}`);
+
+  // 从Git URL获取GitHub API URL
+  const githubApiUrl = gitRepoUrl
+    .replace('https://github.com/', 'https://api.github.com/repos/')
+    .replace(/\.git$/, '');
+
+  // 每5分钟检查一次更新
+  setInterval(async () => {
+    try {
+      console.log('🔍 检查ZIP更新...');
+
+      // 获取最新release信息
+      const response = await fetch(`${githubApiUrl}/releases/latest`);
+      if (!response.ok) {
+        console.log('⚠️  无法获取release信息，跳过更新检查');
+        return;
+      }
+
+      const releaseData = await response.json();
+      const latestVersion = releaseData.tag_name;
+      const zipUrl = releaseData.zipball_url;
+
+      // 读取当前版本
+      let currentVersion = 'unknown';
+      try {
+        const changelogPath = path.join(__dirname, '..', 'CHANGELOG.md');
+        const changelogContent = await fs.readFile(changelogPath, 'utf8');
+        const changelogData = JSON.parse(changelogContent);
+        if (changelogData && changelogData.length > 0) {
+          currentVersion = changelogData[0].version;
+        }
+      } catch (error) {
+        console.warn('⚠️  无法读取当前版本信息');
+      }
+
+      // 比较版本
+      if (latestVersion !== currentVersion && currentVersion !== 'unknown') {
+        console.log(`🔄 发现新版本: ${latestVersion} (当前: ${currentVersion})`);
+        await performZipUpdate(zipUrl, latestVersion);
+      } else if (currentVersion === 'unknown') {
+        console.log('⚠️  无法确定当前版本，跳过更新');
+      } else {
+        console.log(`✅ 版本已是最新: ${currentVersion}`);
+      }
+
     } catch (error) {
-      console.log('⚠️  自动更新检查失败:', error.message);
+      console.log('⚠️  ZIP更新检查失败:', error.message);
     }
   }, 5 * 60 * 1000); // 5分钟
+}
+
+// 执行ZIP更新
+async function performZipUpdate(zipUrl, newVersion) {
+  try {
+    console.log('🔄 开始ZIP更新...');
+
+    // 创建备份
+    try {
+      const { storageService } = await import('./services/storage.js');
+      const backupPath = await storageService.backup();
+      if (backupPath) {
+        console.log(`✅ 更新前备份已创建: ${backupPath}`);
+      }
+    } catch (error) {
+      console.warn('⚠️  更新前备份失败:', error.message);
+    }
+
+    // 下载ZIP文件
+    const tempZipPath = path.join(__dirname, '..', 'temp-update.zip');
+    console.log('📥 下载最新代码...');
+
+    const zipResponse = await fetch(zipUrl);
+    if (!zipResponse.ok) {
+      throw new Error(`下载失败: ${zipResponse.status}`);
+    }
+
+    const buffer = await zipResponse.arrayBuffer();
+    await fs.writeFile(tempZipPath, Buffer.from(buffer));
+
+    console.log('✅ ZIP下载完成，准备解压...');
+
+    // 这里需要解压和替换文件的逻辑
+    // 由于Node.js原生不支持解压，这里提供简化版本
+    console.log('⚠️  自动解压功能需要额外依赖，请手动更新');
+    console.log(`📥 下载链接: ${zipUrl}`);
+    console.log(`🔄 新版本: ${newVersion}`);
+
+    // 清理临时文件
+    try {
+      await fs.unlink(tempZipPath);
+    } catch (error) {
+      // 忽略清理错误
+    }
+
+  } catch (error) {
+    console.error('❌ ZIP更新失败:', error.message);
+  }
 }
 
 // 启动服务器
