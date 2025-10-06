@@ -246,7 +246,10 @@ coinglass-monitor/
 │   │   ├── scraper.js       # CoinGlass 数据抓取 (Puppeteer + Stealth)
 │   │   ├── email.js         # EmailJS 邮件发送服务
 │   │   ├── storage.js       # 数据存储服务
-│   │   └── logger.js        # 日志管理服务
+│   │   ├── logger.js        # 日志管理服务
+│   │   └── data-cleanup.js  # 数据清理服务，统一管理数据目录清理
+│   ├── utils/               # 工具模块
+│   │   └── time-utils.js    # 时间格式化工具
 │   └── routes/              # API 路由
 │       ├── config.js        # 配置管理API
 │       ├── status.js        # 状态查询API

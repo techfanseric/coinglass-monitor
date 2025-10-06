@@ -24,6 +24,9 @@ This is a CoinGlass interest rate monitoring system based on a local Express ser
   - `email.js` - EmailJS 集成用于通知
   - `storage.js` - 本地文件系统存储服务（替代Cloudflare KV）
   - `logger.js` - 日志管理服务
+  - `data-cleanup.js` - 数据清理服务，统一管理所有数据目录的清理
+- **src/utils/** - 工具模块：
+  - `time-utils.js` - 时间格式化工具，提供统一的时间处理函数
 - **src/routes/** - API 路由：
   - `config.js` - 配置管理API
   - `status.js` - 状态查询API
@@ -42,6 +45,8 @@ This is a CoinGlass interest rate monitoring system based on a local Express ser
 - **EmailJS 集成**：EmailJS邮件通知系统，支持多币种通知模板
 - **定时监控服务**：集成在Express服务器中的定时任务系统，支持灵活触发时间
 - **日志管理**：完整的结构化日志记录和自动清理系统，支持实时查看
+- **数据清理服务**：统一管理所有数据目录的自动清理，包括邮件历史、抓取数据、日志文件等
+- **时间工具模块**：提供统一的时间格式化函数，支持中英文时间显示
 - **ES模块架构**：使用"type": "module"支持现代ES6模块语法
 - **Web管理界面**：提供直观的配置管理和状态监控界面
 - **智能配置系统**：自动检测Chrome路径和创建必要目录
