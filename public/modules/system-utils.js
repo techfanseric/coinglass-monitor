@@ -99,8 +99,8 @@ class SystemUtils {
             const logLines = logs.split('\n').filter(line => line.trim());
             let html = '';
 
-            // 反转日志数组，让最新的在上面
-            logLines.reverse().forEach(line => {
+            // 服务器端已经返回了最新的日志在前面，直接显示即可
+            logLines.forEach(line => {
                 const color = this.getLogColor(line);
                 html += `<div style="color: ${color}; margin-bottom: 2px;">${line}</div>`;
             });
