@@ -25,6 +25,7 @@ This is a CoinGlass interest rate monitoring system based on a local Express ser
   - `storage.js` - 本地文件系统存储服务（替代Cloudflare KV）
   - `logger.js` - 日志管理服务
   - `data-cleanup.js` - 数据清理服务，统一管理所有数据目录的清理
+  - `scrape-tracker.js` - 抓取状态追踪服务，实时监控手动触发的抓取进度
 - **src/utils/** - 工具模块：
   - `time-utils.js` - 时间格式化工具，提供统一的时间处理函数
 - **src/routes/** - API 路由：
@@ -267,6 +268,10 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 - `POST /api/config` - 保存用户配置
 - `GET /api/status` - 获取当前监控状态
 - `GET /api/scrape` - 手动触发数据抓取
+- `POST /api/scrape/coinglass` - 手动触发完整监控流程
+- `GET /api/scrape/status` - 获取当前抓取状态（实时进度）
+- `GET /api/scrape/service-status` - 获取抓取服务状态（浏览器服务状态）
+- `GET /api/scrape/history` - 获取抓取历史记录
 - `GET /health` - 服务器健康检查
 
 ## EmailJS配置

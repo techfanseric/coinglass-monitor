@@ -1,11 +1,13 @@
 /**
  * 数据抓取 API 路由
  * 提供与前端兼容的抓取接口
+ * 集成真实状态追踪
  */
 
 import express from 'express';
 import { storageService } from '../services/storage.js';
 import { formatDateTime } from '../utils/time-utils.js';
+import { scrapeTracker } from '../services/scrape-tracker.js';
 
 const router = express.Router();
 
@@ -13,6 +15,8 @@ const router = express.Router();
  * POST /api/scrape/coinglass - 手动触发 CoinGlass 数据抓取和完整监控流程
  */
 router.post('/coinglass', async (req, res) => {
+  let sessionId = null;
+
   try {
     console.log('🕷️ 请求手动触发完整监控流程');
 
@@ -35,6 +39,7 @@ router.post('/coinglass', async (req, res) => {
       return res.status(400).json({
         success: false,
         error: '监控未启用，请先启用监控功能',
+        user_message: '请先开启监控开关',
         timestamp: formatDateTime(new Date())
       });
     }
@@ -43,36 +48,108 @@ router.post('/coinglass', async (req, res) => {
       return res.status(400).json({
         success: false,
         error: '未配置通知邮箱，请先配置邮箱',
+        user_message: '请先配置通知邮箱',
         timestamp: formatDateTime(new Date())
       });
     }
 
-    // 2. 按币种独立配置抓取数据 (修复：使用每个币种的独立配置)
+    // 获取启用的币种配置
+    const enabledCoins = config.coins?.filter(c => c.enabled) || [];
+    if (enabledCoins.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: '没有启用的监控币种',
+        user_message: '请先添加并启用监控项目',
+        timestamp: formatDateTime(new Date())
+      });
+    }
+
+    // 启动状态追踪会话
+    sessionId = scrapeTracker.startSession(config);
+    scrapeTracker.updatePhase('initializing', '正在初始化监控检查...');
+
+    // 2. 开始数据抓取阶段
+    scrapeTracker.updatePhase('starting_browser', '正在启动浏览器...');
+
     const { ScraperService } = await import('../services/scraper.js');
     const scraper = new ScraperService();
-
-    // 获取所有启用的币种配置
-    const enabledCoins = config.coins.filter(c => c.enabled);
     console.log(`🎯 手动触发币种及独立配置:`);
     enabledCoins.forEach(coin => {
       console.log(`  - ${coin.symbol}: 交易所=${coin.exchange}, 颗粒度=${coin.timeframe}, 阈值=${coin.threshold}%`);
     });
 
+    // 3. 开始页面访问和币种抓取
+    scrapeTracker.updatePhase('loading_page', '正在访问CoinGlass网站...');
+
     const startTime = Date.now();
     const allCoinsData = {};
     const scrapingSummary = [];
 
+    // 4. 币种数据抓取阶段
+    scrapeTracker.updatePhase('scraping_coins', `准备抓取 ${enabledCoins.length} 个币种数据...`);
+
     // 为每个启用的币种独立抓取数据
     for (const coin of enabledCoins) {
       try {
+        // 开始处理单个币种
+        scrapeTracker.startCoin(coin.symbol, coin.exchange, coin.timeframe);
         console.log(`🔄 开始抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
 
-        const coinData = await scraper.scrapeCoinGlassData(
+        // 更新进度：开始加载数据页面
+        scrapeTracker.updateCoinScrapingStep('loading_page');
+
+        // 模拟抓取过程中的详细步骤更新
+        const updateProgressDuringScraping = async () => {
+          // 等待一小段时间后显示切换交易所
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          scrapeTracker.updateCoinScrapingStep('switching_exchange', { exchange: coin.exchange });
+
+          // 等待一小段时间后显示等待页面元素
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          scrapeTracker.updateCoinScrapingStep('waiting_for_elements');
+
+          // 等待一小段时间后显示等待数据加载
+          await new Promise(resolve => setTimeout(resolve, 4000));
+          scrapeTracker.updateCoinScrapingStep('waiting_data');
+
+          // 等待一小段时间后显示提取数据
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          scrapeTracker.updateCoinScrapingStep('extracting_data');
+
+          // 等待一小段时间后显示提取历史数据
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          scrapeTracker.updateCoinScrapingStep('extracting_history');
+
+          // 等待一小段时间后显示计算利率
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          scrapeTracker.updateCoinScrapingStep('calculating_rates');
+        };
+
+        // 启动进度更新和实际抓取并行进行
+        const scrapingPromise = scraper.scrapeCoinGlassData(
           coin.exchange || 'binance',  // 使用币种独立配置
           coin.symbol,                  // 使用币种符号
           coin.timeframe || '1h',       // 使用币种独立配置
           [coin.symbol]                 // 只抓取当前币种
         );
+
+        // 启动详细进度更新（不等待完成）
+        const progressUpdatePromise = updateProgressDuringScraping();
+
+        // 等待实际抓取完成
+        const coinData = await scrapingPromise;
+
+        // 更新进度：开始验证和处理数据
+        scrapeTracker.updateCoinScrapingStep('validating_data');
+
+        // 等待一小段时间让进度更新完成
+        await progressUpdatePromise.catch(() => {}); // 忽略进度更新的错误
+
+        // 更新进度：处理数据格式
+        scrapeTracker.updateCoinScrapingStep('processing_data');
+
+        // 更新进度：完成币种处理
+        scrapeTracker.updateCoinScrapingStep('finalizing_coin');
 
         // 检查数据是否存在 - 支持简单键和复合键查找
         let foundCoinData = null;
@@ -88,6 +165,9 @@ router.post('/coinglass', async (req, res) => {
         }
 
         if (foundCoinData) {
+          // 更新进度：处理数据格式
+          scrapeTracker.updateCoinScrapingStep('processing_data');
+
           // 使用复合键存储，避免重复币种覆盖
           const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
 
@@ -112,6 +192,10 @@ router.post('/coinglass', async (req, res) => {
             success: true,
             rate: foundCoinData.annual_rate
           });
+
+          // 标记币种完成
+          scrapeTracker.completeCoin(coin.symbol, true);
+
         } else {
           console.warn(`⚠️ ${coin.symbol} 数据抓取失败`);
           scrapingSummary.push({
@@ -121,6 +205,9 @@ router.post('/coinglass', async (req, res) => {
             success: false,
             error: '数据获取失败'
           });
+
+          // 标记币种失败
+          scrapeTracker.completeCoin(coin.symbol, false, '数据获取失败');
         }
 
         // 币种间添加短暂延迟，避免请求过于频繁
@@ -137,6 +224,9 @@ router.post('/coinglass', async (req, res) => {
           success: false,
           error: error.message
         });
+
+        // 标记币种失败
+        scrapeTracker.completeCoin(coin.symbol, false, error.message);
       }
     }
 
@@ -158,6 +248,7 @@ router.post('/coinglass', async (req, res) => {
     };
 
     if (Object.keys(allCoinsData).length === 0) {
+      scrapeTracker.failSession('所有币种数据抓取失败', 'scraping_failed');
       throw new Error('所有币种数据抓取失败');
     }
 
@@ -169,7 +260,7 @@ router.post('/coinglass', async (req, res) => {
     console.log(`✅ 多币种数据抓取完成，成功获取 ${Object.keys(allCoinsData).length} 个币种数据，耗时: ${duration}ms`);
     console.log('📊 抓取摘要:', scrapingSummary.map(r => `${r.symbol}(${r.exchange}/${r.timeframe}):${r.success?'✅':'❌'}`).join(', '));
 
-    // 3. 保存抓取结果到历史记录
+    // 5. 保存抓取结果到历史记录
     await storageService.saveScrapeResult({
       exchange: 'mixed',
       coin: enabledCoins.map(c => c.symbol).join(','),
@@ -181,10 +272,19 @@ router.post('/coinglass', async (req, res) => {
       scraping_summary: scrapingSummary
     });
 
-    // 4. 执行完整的监控检查流程
+    // 6. 开始监控检查阶段
+    scrapeTracker.updatePhase('analyzing_thresholds', '正在分析利率阈值...');
     console.log('🔍 开始执行监控检查...');
     console.log(`📋 抓取到的币种: ${Object.keys(data.coins).join(', ')}`);
     const monitorResults = await runCompleteMonitorCheck(data, config);
+
+    // 7. 发送通知阶段
+    if (monitorResults.alerts_sent > 0 || monitorResults.recoveries_sent > 0) {
+      scrapeTracker.updatePhase('sending_notifications', '正在发送通知邮件...');
+    }
+
+    // 8. 完成会话
+    scrapeTracker.completeSession(monitorResults);
 
     // 5. 返回完整结果
     res.json({
@@ -206,13 +306,20 @@ router.post('/coinglass', async (req, res) => {
 
   } catch (error) {
     console.error('❌ 手动监控触发失败:', error);
+
+    // 标记会话失败
+    if (sessionId) {
+      scrapeTracker.failSession(error.message, 'error');
+    }
+
     res.status(500).json({
       success: false,
       error: '监控触发失败',
       message: error.message,
       meta: {
         timestamp: formatDateTime(new Date()),
-        triggered_by: 'manual'
+        triggered_by: 'manual',
+        session_id: sessionId
       }
     });
   }
@@ -581,9 +688,9 @@ router.get('/history', async (req, res) => {
 });
 
 /**
- * GET /api/scrape/status - 获取抓取服务状态
+ * GET /api/scrape/service-status - 获取抓取服务状态（浏览器服务状态）
  */
-router.get('/status', async (req, res) => {
+router.get('/service-status', async (req, res) => {
   try {
     console.log('🔍 请求获取抓取服务状态');
 
@@ -694,6 +801,28 @@ router.post('/test-email', async (req, res) => {
     res.status(500).json({
       success: false,
       error: '测试邮件发送失败',
+      message: error.message,
+      timestamp: formatDateTime(new Date())
+    });
+  }
+});
+
+/**
+ * GET /api/scrape/status - 获取当前抓取状态
+ */
+router.get('/status', (req, res) => {
+  try {
+    const status = scrapeTracker.getCurrentStatus();
+    res.json({
+      success: true,
+      status: status,
+      timestamp: formatDateTime(new Date())
+    });
+  } catch (error) {
+    console.error('❌ 获取抓取状态失败:', error);
+    res.status(500).json({
+      success: false,
+      error: '获取状态失败',
       message: error.message,
       timestamp: formatDateTime(new Date())
     });

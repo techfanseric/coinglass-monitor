@@ -178,6 +178,57 @@ body {
     padding: 20px;
 }
 
+/* 日期分割线样式 */
+.changelog-date-divider {
+    position: relative;
+    display: flex;
+    align-items: center;
+    margin: 24px 0 16px 0;
+    color: #a0aec0;
+}
+
+.changelog-date-divider::before {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #e2e8f0;
+}
+
+.changelog-date-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #e2e8f0;
+}
+
+.changelog-date-text {
+    background: white;
+    padding: 0 16px;
+    font-size: 0.8em;
+    color: #718096;
+    font-weight: 500;
+    white-space: nowrap;
+    position: relative;
+    z-index: 1;
+}
+
+/* 更新日志分组样式 */
+.changelog-group {
+    margin-bottom: 8px;
+}
+
+.changelog-group .changelog-item {
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #f8fafc;
+}
+
+.changelog-group .changelog-item:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
 @media (max-width: 600px) {
     .header-main {
         flex-direction: column;

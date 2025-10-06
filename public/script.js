@@ -729,98 +729,92 @@
             }
 
             try {
-                // 禁用按钮并显示进度
+                // 禁用按钮并显示初始进度
                 triggerBtn.disabled = true;
                 triggerBtn.style.opacity = '0.5';
                 triggerBtn.textContent = '⏳';
                 triggerStatus.style.display = 'inline';
-                triggerStatus.textContent = '正在启动浏览器...';
+                triggerStatus.textContent = '正在初始化...';
 
                 showAlert('正在触发监控检查...', 'info');
 
-                // 启动进度更新序列（基于完整监控流程）
-                const progressSteps = [
-                    { time: 1000, text: '访问CoinGlass页面...' },
-                    { time: 3000, text: '切换交易所...' },
-                    { time: 5000, text: '选择币种...' },
-                    { time: 7000, text: '提取数据...' },
-                    { time: 9000, text: '检查阈值条件...' },
-                    { time: 11000, text: '发送通知邮件...' }
-                ];
+                // 开始状态轮询获取实时进度（在发起请求前就开始）
+                let pollInterval = null;
+                let pollCount = 0;
+                const maxPolls = 150; // 最多轮询5分钟 (150 * 2秒)
+                let scrapeCompleted = false;
 
-                const progressTimers = [];
-                progressSteps.forEach(step => {
-                    const timer = setTimeout(() => {
-                        if (triggerBtn.disabled) {
-                            triggerStatus.textContent = step.text;
+                // 立即开始轮询
+                pollInterval = setInterval(async () => {
+                    pollCount++;
+
+                    try {
+                        const statusResponse = await fetch(`${API_BASE}/api/scrape/status`);
+                        const statusData = await statusResponse.json();
+
+                        if (statusData.success && statusData.status) {
+                            updateTriggerUI(statusData.status);
+
+                            // 检查是否已完成或失败
+                            if (!statusData.status.isRunning || pollCount >= maxPolls) {
+                                clearInterval(pollInterval);
+
+                                // 如果抓取还没完成，等待抓取完成
+                                if (!scrapeCompleted) {
+                                    // 等待一下让主请求完成
+                                    setTimeout(async () => {
+                                        try {
+                                            // 最后再尝试获取一次完整结果
+                                            const finalResponse = await fetch(`${API_BASE}/api/scrape/coinglass`, {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({})
+                                            });
+
+                                            if (finalResponse.ok) {
+                                                const finalData = await finalResponse.json();
+                                                handleScrapeComplete(finalData, statusData.status);
+                                            } else {
+                                                handleScrapeComplete({}, statusData.status);
+                                            }
+                                        } catch (finalError) {
+                                            console.error('获取最终结果失败:', finalError);
+                                            handleScrapeComplete({}, statusData.status);
+                                        }
+                                    }, 1000);
+                                } else {
+                                    handleScrapeComplete({}, statusData.status);
+                                }
+                            }
                         }
-                    }, step.time);
-                    progressTimers.push(timer);
-                });
+                    } catch (statusError) {
+                        console.error('状态查询失败:', statusError);
+                        // 状态查询失败不影响主流程，继续轮询
+                    }
+                }, 2000); // 每2秒查询一次
 
-                // 调用正确的API端点
-                const response = await fetch(`${API_BASE}/api/scrape/coinglass`, {
+                // 同时发起抓取请求（不等待完成）
+                fetch(`${API_BASE}/api/scrape/coinglass`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({})
+                }).then(async (response) => {
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({}));
+                        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    scrapeCompleted = true;
+                }).catch(error => {
+                    console.error('触发监控失败:', error);
+                    scrapeCompleted = true;
+                    handleScrapeError(error);
                 });
-
-                // 清除所有进度定时器
-                progressTimers.forEach(timer => clearTimeout(timer));
-
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({}));
-                    throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
-                }
-
-                const data = await response.json();
-
-                // 显示成功状态
-                triggerStatus.textContent = '完成！';
-                triggerBtn.textContent = '✓';
-                triggerBtn.style.color = '#10b981';
-
-                // 根据监控结果显示详细的成功消息
-                let successMessage = '监控触发成功！';
-                if (data.monitor_results) {
-                  const { alerts_sent, recoveries_sent, coins_checked } = data.monitor_results;
-                  if (alerts_sent > 0) {
-                    successMessage += ` 已发送 ${alerts_sent} 个警报通知`;
-                  } else if (recoveries_sent > 0) {
-                    successMessage += ` 已发送 ${recoveries_sent} 个恢复通知`;
-                  } else {
-                    successMessage += ` 检查了 ${coins_checked} 个币种，利率正常`;
-                  }
-                }
-
-                showAlert(successMessage, 'success');
-
-                // 触发后刷新状态
-                setTimeout(() => {
-                    loadStatus();
-                }, 2000);
-
-                // 3秒后恢复按钮状态
-                setTimeout(() => {
-                    resetTriggerButton();
-                }, 3000);
 
             } catch (error) {
                 console.error('触发监控失败:', error);
-
-                // 显示错误状态
-                triggerStatus.textContent = '失败';
-                triggerBtn.textContent = '✗';
-                triggerBtn.style.color = '#ef4444';
-
-                showAlert(`触发监控失败: ${error.message}`, 'error');
-
-                // 3秒后恢复按钮状态
-                setTimeout(() => {
-                    resetTriggerButton();
-                }, 3000);
+                handleScrapeError(error);
             }
         }
 
@@ -840,6 +834,134 @@
                 triggerStatus.style.display = 'none';
                 triggerStatus.textContent = '';
             }
+        }
+
+        // 更新触发UI显示详细进度
+        function updateTriggerUI(status) {
+            const triggerStatus = document.getElementById('triggerStatus');
+            if (!triggerStatus) return;
+
+            let statusText = status.message || '正在处理...';
+
+            // 添加币种进度信息
+            if (status.totalCoins > 0) {
+                const completed = status.completedCoins || 0;
+                const failed = status.failedCoins || 0;
+
+                // 在币种处理阶段，显示过程细节而不是币种信息
+                if (status.scrapingStep) {
+                    // 使用状态消息作为主要显示内容（已经包含过程细节）
+                    statusText = status.message || statusText;
+
+                    // 添加简化的进度信息
+                    statusText += ` (${completed + failed}/${status.totalCoins})`;
+
+                    // 显示失败信息
+                    if (failed > 0) {
+                        statusText += ` [${failed} 失败]`;
+                    }
+                } else {
+                    // 非币种处理阶段，显示常规进度
+                    const current = status.currentCoin;
+                    if (current) {
+                        statusText = `第 ${completed + failed + 1}/${status.totalCoins} 个: ${current.symbol} (${current.exchange}/${current.timeframe})`;
+                    } else {
+                        statusText = `进度: ${completed + failed}/${status.totalCoins} 个币种`;
+                    }
+
+                    // 显示失败信息
+                    if (failed > 0) {
+                        statusText += ` (${failed} 个失败)`;
+                    }
+                }
+            }
+
+            // 添加时间估算
+            if (status.estimatedRemainingTime && status.estimatedRemainingTime > 0) {
+                const remainingSeconds = Math.round(status.estimatedRemainingTime / 1000);
+                const remainingMinutes = Math.ceil(remainingSeconds / 60);
+                if (remainingMinutes > 1) {
+                    statusText += ` - 预计剩余 ${remainingMinutes} 分钟`;
+                } else {
+                    statusText += ` - 预计剩余 ${remainingSeconds} 秒`;
+                }
+            }
+
+            // 添加进度百分比
+            if (status.progress !== undefined) {
+                statusText = `${status.progress}% - ${statusText}`;
+            }
+
+            triggerStatus.textContent = statusText;
+        }
+
+        // 处理抓取完成
+        function handleScrapeComplete(scrapeData, statusData) {
+            const triggerBtn = document.getElementById('triggerBtn');
+            const triggerStatus = document.getElementById('triggerStatus');
+
+            // 显示成功状态
+            triggerStatus.textContent = '完成！';
+            triggerBtn.textContent = '✓';
+            triggerBtn.style.color = '#10b981';
+
+            // 根据实际监控结果显示准确的成功消息
+            let successMessage = '监控检查完成！';
+            if (scrapeData.monitor_results) {
+                const { alerts_sent, recoveries_sent, coins_checked } = scrapeData.monitor_results;
+                if (alerts_sent > 0) {
+                    successMessage = `发现异常！已发送 ${alerts_sent} 个警报通知`;
+                } else if (recoveries_sent > 0) {
+                    successMessage = `恢复正常！已发送 ${recoveries_sent} 个恢复通知`;
+                } else if (coins_checked > 0) {
+                    successMessage = `检查完成！所有 ${coins_checked} 个币种利率正常`;
+                } else {
+                    successMessage = '监控检查完成，但没有检查到有效数据';
+                }
+            }
+
+            // 显示详细的完成信息
+            if (statusData.completedCoins > 0 || statusData.failedCoins > 0) {
+                const totalProcessed = statusData.completedCoins + statusData.failedCoins;
+                const duration = statusData.duration || 0;
+                const durationSeconds = Math.round(duration / 1000);
+
+                successMessage += ` (处理 ${totalProcessed} 个币种，耗时 ${durationSeconds} 秒`;
+                if (statusData.failedCoins > 0) {
+                    successMessage += `，${statusData.failedCoins} 个失败`;
+                }
+                successMessage += ')';
+            }
+
+            showAlert(successMessage, 'success');
+
+            // 触发后刷新状态
+            setTimeout(() => {
+                loadStatus();
+            }, 2000);
+
+            // 3秒后恢复按钮状态
+            setTimeout(() => {
+                resetTriggerButton();
+            }, 3000);
+        }
+
+        // 处理抓取错误
+        function handleScrapeError(error) {
+            const triggerBtn = document.getElementById('triggerBtn');
+            const triggerStatus = document.getElementById('triggerStatus');
+
+            // 显示错误状态
+            triggerStatus.textContent = '失败';
+            triggerBtn.textContent = '✗';
+            triggerBtn.style.color = '#ef4444';
+
+            showAlert(`触发监控失败: ${error.message}`, 'error');
+
+            // 3秒后恢复按钮状态
+            setTimeout(() => {
+                resetTriggerButton();
+            }, 3000);
         }
 
         // 日志功能相关变量和函数
@@ -1127,15 +1249,42 @@
             return changelog;
         }
 
+        // 格式化日期显示（今天、昨天、具体日期）
+        function formatDateForDisplay(dateStr) {
+            const date = new Date(dateStr);
+            const today = new Date();
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
+
+            // 重置时间部分为0点，只比较日期
+            date.setHours(0, 0, 0, 0);
+            today.setHours(0, 0, 0, 0);
+            yesterday.setHours(0, 0, 0, 0);
+
+            if (date.getTime() === today.getTime()) {
+                return '今天';
+            } else if (date.getTime() === yesterday.getTime()) {
+                return '昨天';
+            } else {
+                // 返回 yyyy-MM-dd 格式
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            }
+        }
+
         // 渲染更新日志
         function renderChangelog() {
             const content = document.getElementById('changelogContent');
 
             if (!changelogData || changelogData.length === 0) {
                 content.innerHTML = `
-                    <div class="changelog-item">
-                        <div class="changelog-description">
-                            暂无更新日志
+                    <div class="changelog-group">
+                        <div class="changelog-item">
+                            <div class="changelog-description">
+                                暂无更新日志
+                            </div>
                         </div>
                     </div>
                 `;
@@ -1143,13 +1292,35 @@
             }
 
             let html = '';
+            let currentDate = null;
 
+            // 按日期分组
             changelogData.forEach(item => {
+                const itemDate = item.date;
+
+                // 如果是新的一天，添加日期分割线
+                if (itemDate !== currentDate) {
+                    currentDate = itemDate;
+
+                    // 如果不是第一个日期，关闭上一个组
+                    if (html !== '') {
+                        html += '</div>';
+                    }
+
+                    // 添加新的日期分割线和组
+                    html += `
+                        <div class="changelog-date-divider">
+                            <span class="changelog-date-text">${formatDateForDisplay(itemDate)}</span>
+                        </div>
+                        <div class="changelog-group">
+                    `;
+                }
+
+                // 添加更新项，不包含日期
                 html += `
                     <div class="changelog-item">
                         <div class="changelog-version">
                             <span class="changelog-version-number">${item.version}</span>
-                            <span class="changelog-date">${item.date}</span>
                         </div>
                         <div class="changelog-description">${item.description}</div>
                         ${item.changes && item.changes.length > 0 ? `
@@ -1160,6 +1331,11 @@
                     </div>
                 `;
             });
+
+            // 关闭最后一个组
+            if (html !== '') {
+                html += '</div>';
+            }
 
             content.innerHTML = html;
         }
