@@ -161,9 +161,7 @@ export class ScraperService {
         await page.waitForTimeout(this.config.waitTimes.data);
 
         // 验证切换结果
-        console.log('🔍 验证切换结果...');
         const switchVerification = await this.verifySwitchResult(page, exchange, targetCoin);
-        console.log(`📋 验证结果: ${JSON.stringify(switchVerification, null, 2)}`);
 
         if (!switchVerification.success) {
           console.warn(`⚠️ 切换验证失败: ${switchVerification.reason}`);
@@ -695,7 +693,10 @@ export class ScraperService {
         };
       }, expectedCoin);
 
-      console.log(`🔍 验证 ${expectedCoin} 切换结果:`, verification);
+      // 验证结果只在失败时输出详细信息，成功时不显示
+      if (!verification.success) {
+        console.log(`🔍 验证 ${expectedCoin} 切换失败: ${verification.reason}`);
+      }
       return verification;
     } catch (error) {
       console.error(`❌ 验证币种切换失败:`, error);

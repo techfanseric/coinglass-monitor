@@ -140,8 +140,8 @@ router.post('/', async (req, res) => {
 
     // 确保必要字段存在 - 优化配置结构
     const validatedConfig = {
-      email: config.email || '',
-      monitoring_enabled: Boolean(config.monitoring_enabled),
+      email: config.email || '', // 保留以向后兼容
+      // 移除全局 monitoring_enabled，改为基于邮件组的控制
       // 保留filters以维持向后兼容，但不再强制使用
       filters: {
         exchange: config.filters?.exchange || 'binance',
@@ -151,6 +151,22 @@ router.post('/', async (req, res) => {
       },
       // 使用验证后的币种配置
       coins: validatedCoins,
+      // 验证并规范化邮件分组配置
+      email_groups: Array.isArray(config.email_groups) ? config.email_groups.map(group => ({
+        id: group.id || `group_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        name: group.name || '未命名邮件组',
+        email: group.email || '',
+        enabled: Boolean(group.enabled !== false), // 默认启用，除非明确禁用
+        coins: Array.isArray(group.coins) ? group.coins.map(coin => ({
+          symbol: coin.symbol || '',
+          exchange: coin.exchange || 'binance',
+          timeframe: coin.timeframe || '1h',
+          threshold: Number(coin.threshold) || 1,
+          enabled: Boolean(coin.enabled !== false), // 默认启用，除非明确禁用
+          ...coin
+        })) : [],
+        ...group
+      })) : [],
       trigger_settings: {
         hourly_minute: Number(config.trigger_settings?.hourly_minute) || 0,
         daily_hour: Number(config.trigger_settings?.daily_hour) || 9,
@@ -166,6 +182,8 @@ router.post('/', async (req, res) => {
 
     if (success) {
       console.log('✅ 配置保存成功');
+      console.log('📧 邮件分组数量:', validatedConfig.email_groups?.length || 0);
+      console.log('💾 保存的配置结构:', Object.keys(validatedConfig));
       res.json({
         success: true,
         message: '配置保存成功',

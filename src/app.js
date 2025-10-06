@@ -328,7 +328,7 @@ const serverConfig = {
   requestBodySizeLimit: process.env.REQUEST_BODY_SIZE_LIMIT || '10mb',
   silentPaths: process.env.SILENT_PATHS ?
     process.env.SILENT_PATHS.split(',').map(path => path.trim()) :
-    ['/api/status/logs', '/api/status', '/api/config', '/'],
+    ['/api/status/logs', '/api/status', '/api/config', '/', '/script.js', '/style.css', '/.well-known/appspecific/com.chrome.devtools.json'],
   logRequestEnabled: process.env.LOG_REQUEST_ENABLED !== 'false'
 };
 
@@ -394,6 +394,18 @@ app.use((req, res, next) => {
 
   // 不记录这些频繁的请求，避免日志污染
   if (serverConfig.silentPaths.some(path => req.url === path || req.url.startsWith(path + '?'))) {
+    return next();
+  }
+
+  // 不记录静态文件请求（CSS, JS, 图片等）
+  const staticFileExtensions = ['.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.eot'];
+  const urlPath = req.url.toLowerCase();
+  if (staticFileExtensions.some(ext => urlPath.endsWith(ext)) || urlPath.includes('/.well-known/')) {
+    return next();
+  }
+
+  // 不记录浏览器开发者工具的请求
+  if (urlPath.includes('chrome-devtools') || urlPath.includes('devtools')) {
     return next();
   }
 
@@ -509,58 +521,79 @@ async function startMonitoringService() {
   try {
     const { monitorService } = await import('./services/monitor-service.js');
 
-    // 检查监控状态
+    // 静默启动监控服务
     const config = await import('./services/storage.js').then(m => m.storageService.getConfig());
 
-    if (config && config.monitoring_enabled) {
-      console.log('🕐 监控服务已启动，配置已启用');
-
-      // 可选：立即运行一次监控测试
-      if (process.env.RUN_MONITORING_ON_START === 'true') {
-        console.log('🔄 执行启动时监控检查...');
-        const result = await monitorService.runMonitoring();
-        if (result.success) {
-          console.log('✅ 启动时监控检查完成');
-        } else {
-          console.log(`⚠️  启动时监控检查: ${result.reason || result.error}`);
-        }
-      }
-    } else {
-      console.log('🕐 监控服务已就绪（当前未启用）');
+    // 可选：立即运行一次监控测试
+    if (process.env.RUN_MONITORING_ON_START === 'true') {
+      await monitorService.runMonitoring();
     }
   } catch (error) {
     console.error('❌ 监控服务启动失败:', error);
   }
 }
 
+// 启动监控定时调度
+function startMonitoringScheduler() {
+  if (process.env.MONITORING_AUTO_START === 'true') {
+    const schedulePattern = process.env.MONITORING_CRON_SCHEDULE || '*/5 * * * *';
+    const timezone = process.env.MONITORING_TIMEZONE || 'Asia/Shanghai';
+
+    const monitoringTask = cron.schedule(schedulePattern, async () => {
+      try {
+        // 直接运行监控（内部会检查触发条件和邮件组配置）
+        const { monitorService } = await import('./services/monitor-service.js');
+        await monitorService.runMonitoring();
+      } catch (error) {
+        console.error('❌ 定时监控任务执行失败:', error);
+      }
+    }, {
+      scheduled: true,
+      timezone: timezone
+    });
+
+    // 静默启动，不输出详细日志
+  }
+}
+
+// 将cron表达式转换为友好的描述
+function getCronDescription(cronExpr) {
+  // 优先使用环境配置的描述
+  if (cronExpr === process.env.DATA_CLEANUP_SCHEDULE && process.env.DATA_CLEANUP_TIME_DESCRIPTION) {
+    return process.env.DATA_CLEANUP_TIME_DESCRIPTION;
+  }
+
+  const parts = cronExpr.split(' ');
+  if (parts.length !== 5) return cronExpr;
+
+  const [minute, hour, day, month, dayOfWeek] = parts;
+
+  if (minute === '0' && hour === '2' && day === '*' && month === '*' && dayOfWeek === '*') {
+    return '每天02:00';
+  } else if (minute === '0' && hour === '*' && day === '*' && month === '*' && dayOfWeek === '*') {
+    return '每小时';
+  } else if (cronExpr === '*/5 * * * *') {
+    return '每5分钟';
+  } else {
+    return cronExpr;
+  }
+}
+
 // 启动数据清理定时任务
 function startDataCleanup() {
-  // 每天凌晨2点执行清理 - 使用cron确保准时执行
-  const cleanupTask = cron.schedule('0 2 * * *', async () => {
+  // 检查是否启用数据清理
+  if (process.env.DATA_CLEANUP_ENABLED !== 'true') {
+    return null;
+  }
+
+  // 使用配置的清理时间，默认每天凌晨2点
+  const cleanupSchedule = process.env.DATA_CLEANUP_SCHEDULE || '0 2 * * *';
+
+  const cleanupTask = cron.schedule(cleanupSchedule, async () => {
     try {
       const { dataCleanupService } = await import('./services/data-cleanup.js');
-
-      console.log('🧹 开始执行每日定时数据清理...');
-      const now = new Date();
-      console.log(`⏰ 执行时间: ${formatDateTime(now)}`);
-
-      // 使用统一的数据清理服务清理所有目录
-      const cleanupResult = await dataCleanupService.cleanupAll();
-
-      if (cleanupResult.success) {
-        console.log(`✅ 定时数据清理任务完成: 删除 ${cleanupResult.totalCleaned} 个文件，释放 ${(cleanupResult.totalSize / 1024 / 1024).toFixed(2)}MB`);
-      } else {
-        console.log('⚠️ 定时数据清理部分完成，存在一些错误');
-      }
-
-      // 输出详细的清理结果（如果启用详细日志）
-      if (process.env.DETAILED_CLEANUP_LOGGING === 'true') {
-        cleanupResult.directories.forEach(dir => {
-          if (dir.cleanedCount > 0) {
-            console.log(`  📁 ${dir.directory}: 删除 ${dir.cleanedCount} 个文件`);
-          }
-        });
-      }
+      // 静默执行清理，只在需要时输出日志
+      await dataCleanupService.cleanupAll();
     } catch (error) {
       console.error('❌ 定时数据清理失败:', error);
     }
@@ -568,28 +601,6 @@ function startDataCleanup() {
     scheduled: true,
     timezone: 'Asia/Shanghai' // 使用中国时区
   });
-
-  console.log('✅ 已启动定时清理任务 - 每天凌晨2点执行');
-
-  // 立即执行一次清理（1分钟后）
-  setTimeout(async () => {
-    try {
-      const { dataCleanupService } = await import('./services/data-cleanup.js');
-
-      console.log('🧹 执行启动时数据清理...');
-
-      // 使用统一的数据清理服务清理所有目录
-      const cleanupResult = await dataCleanupService.cleanupAll();
-
-      if (cleanupResult.success) {
-        console.log(`✅ 启动时数据清理完成: 删除 ${cleanupResult.totalCleaned} 个文件，释放 ${(cleanupResult.totalSize / 1024 / 1024).toFixed(2)}MB`);
-      } else {
-        console.log('⚠️ 启动时数据清理部分完成，存在一些错误');
-      }
-    } catch (error) {
-      console.error('❌ 启动时数据清理失败:', error);
-    }
-  }, 60 * 1000); // 1分钟后执行
 
   return cleanupTask;
 }
@@ -680,6 +691,9 @@ async function startServer() {
     // 启动监控服务
     await startMonitoringService();
 
+    // 启动监控定时任务
+    startMonitoringScheduler();
+
     // 启动Git自动更新
     startGitAutoUpdate();
 
@@ -693,7 +707,7 @@ async function startServer() {
       console.log(`📁 数据目录: ${process.env.DATA_DIR || './data'} | 📋 日志目录: ${process.env.LOGS_DIR || './logs'}`);
       console.log('=====================================');
       console.log(`⏰ 启动时间: ${formatDateTimeCN(new Date())}`);
-      console.log('🗑️ 数据清理: 每天凌晨2点自动清理7天前的所有历史数据（日志、邮件、截图、备份等）');
+      console.log(`🗑️ 数据清理: 每天${process.env.DATA_CLEANUP_TIME_DESCRIPTION || '02:00'}自动清理7天前的所有历史数据（日志、邮件、截图、备份等）`);
       });
 
   } catch (error) {

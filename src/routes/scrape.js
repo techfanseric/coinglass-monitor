@@ -35,31 +35,77 @@ router.post('/coinglass', async (req, res) => {
 
     // 1. 获取用户配置
     const config = await storageService.getConfig();
-    if (!config || !config.monitoring_enabled) {
+    if (!config) {
       return res.status(400).json({
         success: false,
-        error: '监控未启用，请先启用监控功能',
-        user_message: '请先开启监控开关',
+        error: '未找到配置信息',
+        user_message: '请先配置监控参数',
         timestamp: formatDateTime(new Date())
       });
     }
 
-    if (!config.email) {
+    // 检查是否有启用的邮件组
+    if (!config.email_groups || !Array.isArray(config.email_groups) || config.email_groups.length === 0) {
       return res.status(400).json({
         success: false,
-        error: '未配置通知邮箱，请先配置邮箱',
-        user_message: '请先配置通知邮箱',
+        error: '未配置邮件组，请先添加邮件组',
+        user_message: '请先添加并配置邮件组',
         timestamp: formatDateTime(new Date())
       });
     }
 
-    // 获取启用的币种配置
-    const enabledCoins = config.coins?.filter(c => c.enabled) || [];
+    // 检查是否有启用的邮件组
+    const enabledGroups = config.email_groups.filter(group =>
+      group.enabled !== false && // 默认启用，除非明确禁用
+      group.email && group.email.trim() !== '' &&
+      group.coins && Array.isArray(group.coins) && group.coins.length > 0
+    );
+
+    if (enabledGroups.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: '没有启用的邮件组，请先启用至少一个邮件组',
+        user_message: '请先启用至少一个邮件组并配置邮箱和币种',
+        timestamp: formatDateTime(new Date())
+      });
+    }
+
+    // 检查邮箱格式
+    const hasValidEmail = enabledGroups.some(group =>
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(group.email.trim())
+    );
+
+    if (!hasValidEmail) {
+      return res.status(400).json({
+        success: false,
+        error: '启用的邮件组中没有有效的邮箱地址',
+        user_message: '请检查邮件组中的邮箱地址是否正确',
+        timestamp: formatDateTime(new Date())
+      });
+    }
+
+    // 从启用的邮件组中收集启用的币种
+    let enabledCoins = [];
+
+    for (const group of enabledGroups) {
+      if (group.coins && Array.isArray(group.coins)) {
+        const groupCoins = group.coins
+          .filter(coin => coin.enabled !== false) // 只收集启用的币种
+          .map(coin => ({
+            ...coin,
+            group_id: group.id,
+            group_name: group.name,
+            group_email: group.email
+          }));
+          enabledCoins.push(...groupCoins);
+      }
+    }
+
     if (enabledCoins.length === 0) {
       return res.status(400).json({
         success: false,
-        error: '没有启用的监控币种',
-        user_message: '请先添加并启用监控项目',
+        error: '启用的邮件组中没有启用的监控币种',
+        user_message: '请先在邮件组中添加并启用监控项目',
         timestamp: formatDateTime(new Date())
       });
     }
@@ -69,7 +115,7 @@ router.post('/coinglass', async (req, res) => {
     scrapeTracker.updatePhase('initializing', '正在初始化监控检查...');
 
     // 2. 开始数据抓取阶段
-    scrapeTracker.updatePhase('starting_browser', '正在启动浏览器...');
+    scrapeTracker.updatePhase('starting_browser', '浏览器启动中');
 
     const { ScraperService } = await import('../services/scraper.js');
     const scraper = new ScraperService();
@@ -79,14 +125,14 @@ router.post('/coinglass', async (req, res) => {
     });
 
     // 3. 开始页面访问和币种抓取
-    scrapeTracker.updatePhase('loading_page', '正在访问CoinGlass网站...');
+    scrapeTracker.updatePhase('loading_page', '访问CoinGlass网站');
 
     const startTime = Date.now();
     const allCoinsData = {};
     const scrapingSummary = [];
 
     // 4. 币种数据抓取阶段
-    scrapeTracker.updatePhase('scraping_coins', `准备抓取 ${enabledCoins.length} 个币种数据...`);
+    scrapeTracker.updatePhase('scraping_coins', `开始抓取 ${enabledCoins.length} 个币种数据`);
 
     // 为每个启用的币种独立抓取数据
     for (const coin of enabledCoins) {
@@ -95,61 +141,13 @@ router.post('/coinglass', async (req, res) => {
         scrapeTracker.startCoin(coin.symbol, coin.exchange, coin.timeframe);
         console.log(`🔄 开始抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
 
-        // 更新进度：开始加载数据页面
-        scrapeTracker.updateCoinScrapingStep('loading_page');
-
-        // 模拟抓取过程中的详细步骤更新
-        const updateProgressDuringScraping = async () => {
-          // 等待一小段时间后显示切换交易所
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          scrapeTracker.updateCoinScrapingStep('switching_exchange', { exchange: coin.exchange });
-
-          // 等待一小段时间后显示等待页面元素
-          await new Promise(resolve => setTimeout(resolve, 3000));
-          scrapeTracker.updateCoinScrapingStep('waiting_for_elements');
-
-          // 等待一小段时间后显示等待数据加载
-          await new Promise(resolve => setTimeout(resolve, 4000));
-          scrapeTracker.updateCoinScrapingStep('waiting_data');
-
-          // 等待一小段时间后显示提取数据
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          scrapeTracker.updateCoinScrapingStep('extracting_data');
-
-          // 等待一小段时间后显示提取历史数据
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          scrapeTracker.updateCoinScrapingStep('extracting_history');
-
-          // 等待一小段时间后显示计算利率
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          scrapeTracker.updateCoinScrapingStep('calculating_rates');
-        };
-
-        // 启动进度更新和实际抓取并行进行
-        const scrapingPromise = scraper.scrapeCoinGlassData(
+        // 直接进行真实抓取，无任何模拟
+        const coinData = await scraper.scrapeCoinGlassData(
           coin.exchange || 'binance',  // 使用币种独立配置
           coin.symbol,                  // 使用币种符号
           coin.timeframe || '1h',       // 使用币种独立配置
           [coin.symbol]                 // 只抓取当前币种
         );
-
-        // 启动详细进度更新（不等待完成）
-        const progressUpdatePromise = updateProgressDuringScraping();
-
-        // 等待实际抓取完成
-        const coinData = await scrapingPromise;
-
-        // 更新进度：开始验证和处理数据
-        scrapeTracker.updateCoinScrapingStep('validating_data');
-
-        // 等待一小段时间让进度更新完成
-        await progressUpdatePromise.catch(() => {}); // 忽略进度更新的错误
-
-        // 更新进度：处理数据格式
-        scrapeTracker.updateCoinScrapingStep('processing_data');
-
-        // 更新进度：完成币种处理
-        scrapeTracker.updateCoinScrapingStep('finalizing_coin');
 
         // 检查数据是否存在 - 支持简单键和复合键查找
         let foundCoinData = null;
@@ -165,9 +163,6 @@ router.post('/coinglass', async (req, res) => {
         }
 
         if (foundCoinData) {
-          // 更新进度：处理数据格式
-          scrapeTracker.updateCoinScrapingStep('processing_data');
-
           // 使用复合键存储，避免重复币种覆盖
           const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
 
@@ -193,8 +188,8 @@ router.post('/coinglass', async (req, res) => {
             rate: foundCoinData.annual_rate
           });
 
-          // 标记币种完成
-          scrapeTracker.completeCoin(coin.symbol, true);
+          // 标记币种完成，包含真实利率信息
+          scrapeTracker.completeCoin(coin.symbol, true, foundCoinData.annual_rate);
 
         } else {
           console.warn(`⚠️ ${coin.symbol} 数据抓取失败`);
@@ -207,7 +202,7 @@ router.post('/coinglass', async (req, res) => {
           });
 
           // 标记币种失败
-          scrapeTracker.completeCoin(coin.symbol, false, '数据获取失败');
+          scrapeTracker.completeCoin(coin.symbol, false, null, '数据获取失败');
         }
 
         // 币种间添加短暂延迟，避免请求过于频繁
@@ -226,7 +221,7 @@ router.post('/coinglass', async (req, res) => {
         });
 
         // 标记币种失败
-        scrapeTracker.completeCoin(coin.symbol, false, error.message);
+        scrapeTracker.completeCoin(coin.symbol, false, null, error.message);
       }
     }
 
@@ -273,14 +268,14 @@ router.post('/coinglass', async (req, res) => {
     });
 
     // 6. 开始监控检查阶段
-    scrapeTracker.updatePhase('analyzing_thresholds', '正在分析利率阈值...');
+    scrapeTracker.updatePhase('analyzing_thresholds', '分析阈值检查');
     console.log('🔍 开始执行监控检查...');
     console.log(`📋 抓取到的币种: ${Object.keys(data.coins).join(', ')}`);
-    const monitorResults = await runCompleteMonitorCheck(data, config);
+    const monitorResults = await runCompleteMonitorCheck(data, config, enabledCoins);
 
     // 7. 发送通知阶段
     if (monitorResults.alerts_sent > 0 || monitorResults.recoveries_sent > 0) {
-      scrapeTracker.updatePhase('sending_notifications', '正在发送通知邮件...');
+      scrapeTracker.updatePhase('sending_notifications', '发送邮件通知');
     }
 
     // 8. 完成会话
@@ -296,7 +291,7 @@ router.post('/coinglass', async (req, res) => {
         duration: duration,
         source: 'coinglass_multi_exchange',
         triggered_by: 'manual',
-        monitoring_enabled: config.monitoring_enabled,
+        enabled_groups_count: enabledGroups.length,
         alerts_triggered: monitorResults.alerts_sent || 0,
         scraping_summary: scrapingSummary,
         total_coins: enabledCoins.length,
@@ -328,7 +323,7 @@ router.post('/coinglass', async (req, res) => {
 /**
  * 执行完整的监控检查流程
  */
-async function runCompleteMonitorCheck(rateData, config) {
+async function runCompleteMonitorCheck(rateData, config, enabledCoins) {
   const results = {
     coins_checked: 0,
     alerts_sent: 0,
@@ -344,7 +339,7 @@ async function runCompleteMonitorCheck(rateData, config) {
     // 检查每个启用的币种
     const triggeredCoins = []; // 收集所有触发警报的币种
 
-    for (const coin of config.coins.filter(c => c.enabled)) {
+    for (const coin of enabledCoins) {
       console.log(`🔍 处理币种: ${coin.symbol} (${coin.exchange}/${coin.timeframe})`);
 
       try {
@@ -358,7 +353,10 @@ async function runCompleteMonitorCheck(rateData, config) {
           current_rate: coinResult.current_rate,
           threshold: coin.threshold,
           exchange: coin.exchange,
-          timeframe: coin.timeframe
+          timeframe: coin.timeframe,
+          group_id: coin.group_id,
+          group_name: coin.group_name,
+          group_email: coin.group_email
         });
       } else {
         results.alerts_sent += coinResult.alert_sent ? 1 : 0;
@@ -383,18 +381,51 @@ async function runCompleteMonitorCheck(rateData, config) {
       }
     }
 
-    // 发送多币种警报邮件
+    // 按邮件组发送警报邮件
     if (triggeredCoins.length > 0) {
-      console.log(`🚨 准备发送多币种警报邮件: ${triggeredCoins.length} 个币种`);
+      console.log(`🚨 准备按邮件组发送警报: ${triggeredCoins.length} 个币种触发阈值`);
 
       const { emailService } = await import('../services/email.js');
-      const multiCoinSuccess = await emailService.sendMultiCoinAlert(triggeredCoins, rateData, config);
 
-      if (multiCoinSuccess) {
-        results.alerts_sent += triggeredCoins.length;
-        console.log(`✅ 多币种警报邮件发送成功，包含 ${triggeredCoins.length} 个币种`);
-      } else {
-        console.error(`❌ 多币种警报邮件发送失败`);
+      // 按邮件组分组触发币种
+      const triggeredCoinsByGroup = {};
+      triggeredCoins.forEach(coin => {
+        if (coin.group_id) {
+          if (!triggeredCoinsByGroup[coin.group_id]) {
+            triggeredCoinsByGroup[coin.group_id] = {
+              group: config.email_groups.find(g => g.id === coin.group_id),
+              coins: []
+            };
+          }
+          triggeredCoinsByGroup[coin.group_id].coins.push(coin);
+        }
+      });
+
+      // 为每个启用的邮件组发送警报
+      for (const [groupId, groupData] of Object.entries(triggeredCoinsByGroup)) {
+        const group = groupData.group;
+        const groupTriggeredCoins = groupData.coins;
+
+        // 只为启用的组发送邮件
+        if (group.enabled !== false && group.email && group.email.trim() !== '') {
+          console.log(`📧 发送组警报: ${group.name} (${group.email}) - ${groupTriggeredCoins.length} 个币种`);
+
+          const groupSuccess = await emailService.sendGroupAlert(
+            group,
+            groupTriggeredCoins,
+            rateData.coins,
+            config
+          );
+
+          if (groupSuccess) {
+            results.alerts_sent += groupTriggeredCoins.length;
+            console.log(`✅ ${group.name} 邮件发送成功，包含 ${groupTriggeredCoins.length} 个币种`);
+          } else {
+            console.error(`❌ ${group.name} 邮件发送失败`);
+          }
+        } else {
+          console.log(`⏭️ 跳过禁用或无效邮件组: ${group.name || groupId}`);
+        }
       }
     }
 

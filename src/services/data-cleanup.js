@@ -71,8 +71,22 @@ export class DataCleanupService {
     const startTime = Date.now();
     const results = {
       success: true,
-      totalCleaned: 0,
-      totalSize: 0,
+      summary: {
+        totalFilesDeleted: 0,
+        totalLogLinesCleaned: 0,
+        totalSizeFreed: 0,
+        totalDirectoriesProcessed: 0
+      },
+      details: {
+        files: {
+          count: 0,
+          size: 0
+        },
+        logs: {
+          lines: 0,
+          size: 0
+        }
+      },
       directories: [],
       errors: [],
       duration: 0
@@ -96,8 +110,20 @@ export class DataCleanupService {
         if (result.status === 'fulfilled') {
           const dirResult = result.value;
           results.directories.push(dirResult);
-          results.totalCleaned += dirResult.cleanedCount;
-          results.totalSize += dirResult.totalSize;
+
+          // 分别统计文件和目录
+          if (dirResult.name === '日志文件') {
+            results.details.logs.lines += dirResult.cleanedCount;
+            results.details.logs.size += dirResult.totalSize;
+            results.summary.totalLogLinesCleaned += dirResult.cleanedCount;
+          } else {
+            results.details.files.count += dirResult.cleanedCount;
+            results.details.files.size += dirResult.totalSize;
+            results.summary.totalFilesDeleted += dirResult.cleanedCount;
+          }
+
+          results.summary.totalSizeFreed += dirResult.totalSize;
+          results.summary.totalDirectoriesProcessed += 1;
         } else {
           const error = result.reason;
           results.errors.push({
@@ -112,13 +138,30 @@ export class DataCleanupService {
       // 清理日志文件（使用现有的 loggerService 方法）
       const logCleanupResult = await this.cleanupLogs();
       results.directories.push(logCleanupResult);
-      results.totalCleaned += logCleanupResult.cleanedCount;
+      results.details.logs.lines += logCleanupResult.cleanedCount;
+      results.details.logs.size += logCleanupResult.totalSize;
+      results.summary.totalLogLinesCleaned += logCleanupResult.cleanedCount;
+      results.summary.totalSizeFreed += logCleanupResult.totalSize;
+      results.summary.totalDirectoriesProcessed += 1;
 
       results.duration = Date.now() - startTime;
 
       // 输出汇总信息
-      console.log(`✅ 数据清理完成: 删除 ${results.totalCleaned} 个文件，释放 ${(results.totalSize / 1024 / 1024).toFixed(2)}MB，耗时 ${results.duration}ms`);
-      loggerService.info(`[数据清理服务] 清理完成: 删除${results.totalCleaned}个文件，释放${(results.totalSize / 1024 / 1024).toFixed(2)}MB`);
+      const showDetailed = process.env.DETAILED_CLEANUP_REPORTING === 'true';
+      if (showDetailed) {
+        console.log(`✅ 数据清理完成:`);
+        console.log(`   📁 删除文件: ${results.details.files.count} 个 (${(results.details.files.size / 1024 / 1024).toFixed(2)}MB)`);
+        console.log(`   📝 清理日志: ${results.details.logs.lines} 行 (${(results.details.logs.size / 1024 / 1024).toFixed(2)}MB)`);
+        console.log(`   💾 释放空间: ${(results.summary.totalSizeFreed / 1024 / 1024).toFixed(2)}MB`);
+        console.log(`   📂 处理目录: ${results.summary.totalDirectoriesProcessed} 个`);
+        console.log(`   ⏱️  耗时: ${results.duration}ms`);
+
+        loggerService.info(`[数据清理服务] 清理完成 - 文件:${results.details.files.count}个, 日志:${results.details.logs.lines}行, 空间:${(results.summary.totalSizeFreed / 1024 / 1024).toFixed(2)}MB, 耗时:${results.duration}ms`);
+      } else {
+        const totalItems = results.details.files.count + results.details.logs.lines;
+        console.log(`✅ 数据清理完成: 删除 ${totalItems} 个项目，释放 ${(results.summary.totalSizeFreed / 1024 / 1024).toFixed(2)}MB，耗时 ${results.duration}ms`);
+        loggerService.info(`[数据清理服务] 清理完成: 删除${totalItems}个项目，释放${(results.summary.totalSizeFreed / 1024 / 1024).toFixed(2)}MB，耗时${results.duration}ms`);
+      }
 
       if (results.errors.length > 0) {
         console.warn(`⚠️ 清理过程中发生 ${results.errors.length} 个错误`);

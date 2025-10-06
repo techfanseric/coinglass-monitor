@@ -10,7 +10,7 @@ import { loggerService } from './logger.js';
 import { formatDateTime, formatDateTimeCN } from '../utils/time-utils.js';
 
 /**
- * 运行监控逻辑
+ * 运行监控逻辑 - 支持邮件分组
  */
 export async function runMonitoring() {
   const logPrefix = '[监控任务]';
@@ -20,10 +20,17 @@ export async function runMonitoring() {
   try {
     // 2. 获取用户配置
     const config = await storageService.getConfig();
-    if (!config || !config.monitoring_enabled) {
-      loggerService.warn(`${logPrefix} 监控未启用`);
-      console.log('监控未启用');
-      return { success: false, reason: 'monitoring_disabled' };
+    if (!config) {
+      loggerService.warn(`${logPrefix} 未找到配置信息`);
+      console.log('未找到配置信息');
+      return { success: false, reason: 'no_config' };
+    }
+
+    // 检查是否有邮件组配置
+    if (!config.email_groups || !Array.isArray(config.email_groups) || config.email_groups.length === 0) {
+      loggerService.warn(`${logPrefix} 未配置邮件组`);
+      console.log('未配置邮件组');
+      return { success: false, reason: 'no_email_groups' };
     }
 
     // 1. 检查当前时间是否满足触发条件
@@ -33,19 +40,450 @@ export async function runMonitoring() {
       return { success: false, reason: 'trigger_time_not_met' };
     }
 
-    loggerService.info(`${logPrefix} 触发条件满足，开始按币种独立抓取 CoinGlass 数据`);
-    console.log('2. 触发条件满足，开始按币种独立抓取 CoinGlass 数据...');
+    // 使用邮件组监控逻辑
+    return await runGroupedMonitoring(config);
+  } catch (error) {
+    console.error('监控执行异常:', error);
+    return { success: false, error: error.message };
+  }
+}
 
-    // 3. 按币种独立抓取数据（修复：使用每个币种的独立配置）
-    const enabledCoins = config.coins.filter(c => c.enabled);
-    const allCoinsData = {};
-    const results = [];
+/**
+ * 运行分组监控 - 新的主要监控逻辑
+ */
+async function runGroupedMonitoring(config) {
+  const logPrefix = '[分组监控]';
+  loggerService.info(`${logPrefix} 开始执行分组监控任务`);
+  console.log('2. 使用邮件分组模式执行监控...');
 
-    loggerService.info(`${logPrefix} 准备按独立配置抓取币种: ${enabledCoins.map(c => `${c.symbol}(${c.exchange}/${c.timeframe})`).join(', ')}`);
-    console.log(`🎯 准备按独立配置抓取币种:`);
+  const groupResults = [];
+
+  // 按分组处理，只处理启用的组
+  const enabledGroups = config.email_groups.filter(group =>
+    group.enabled !== false && // 默认启用，除非明确禁用
+    group.email && group.email.trim() !== '' &&
+    group.coins && Array.isArray(group.coins) && group.coins.length > 0
+  );
+
+  if (enabledGroups.length === 0) {
+    loggerService.warn(`${logPrefix} 没有启用的邮件组`);
+    console.log('没有启用的邮件组');
+    return { success: false, reason: 'no_enabled_groups' };
+  }
+
+  for (const group of enabledGroups) {
+    try {
+      console.log(`🔄 处理启用的分组: ${group.name} (${group.email})`);
+      const result = await processGroupMonitoring(group, config);
+      groupResults.push(result);
+
+      // 组间延迟，避免请求过于频繁
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (error) {
+      console.error(`❌ 处理分组 ${group.name} 失败:`, error);
+      groupResults.push({
+        groupId: group.id,
+        groupName: group.name,
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
+  // 检查是否有待发送的通知
+  await checkPendingNotifications(config);
+
+  const totalTriggered = groupResults.reduce((sum, result) => sum + (result.triggeredCount || 0), 0);
+
+  loggerService.info(`${logPrefix} 分组监控完成，总触发 ${totalTriggered} 个币种`);
+  console.log(`✅ 分组监控完成，总触发 ${totalTriggered} 个币种`);
+
+  return {
+    success: true,
+    type: 'grouped',
+    results: groupResults,
+    totalGroups: config.email_groups.length,
+    totalTriggered
+  };
+}
+
+/**
+ * 处理单个分组的监控
+ */
+async function processGroupMonitoring(group, globalConfig) {
+  const logPrefix = `[分组${group.name}]`;
+
+  try {
+    // 获取该组启用的币种
+    const enabledCoins = group.coins.filter(c => c.enabled);
+    if (enabledCoins.length === 0) {
+      console.log(`⚠️ 分组 ${group.name} 没有启用的币种，跳过`);
+      return {
+        groupId: group.id,
+        groupName: group.name,
+        email: group.email,
+        triggeredCount: 0,
+        enabledCoinsCount: 0,
+        success: true,
+        skipped: true
+      };
+    }
+
+    console.log(`🎯 ${group.name}: 准备抓取 ${enabledCoins.length} 个币种`);
     enabledCoins.forEach(coin => {
-      console.log(`  - ${coin.symbol}: 交易所=${coin.exchange}, 颗粒度=${coin.timeframe}`);
+      console.log(`  - ${coin.symbol}: 交易所=${coin.exchange}, 颗粒度=${coin.timeframe}, 阈值=${coin.threshold}%`);
     });
+
+    // 按币种独立抓取数据
+    const allCoinsData = {};
+    const coinResults = [];
+
+    for (const coin of enabledCoins) {
+      try {
+        console.log(`🔄 开始抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
+
+        const coinRateData = await scraperService.scrapeCoinGlassData(
+          coin.exchange || 'binance',
+          coin.symbol,
+          coin.timeframe || '1h',
+          [coin.symbol]
+        );
+
+        if (coinRateData && coinRateData.coins && coinRateData.coins[coin.symbol]) {
+          const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+          allCoinsData[coinKey] = coinRateData.coins[coin.symbol];
+
+          console.log(`✅ ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据抓取成功，利率: ${coinRateData.coins[coin.symbol].annual_rate}%`);
+        } else {
+          console.warn(`⚠️ ${coin.symbol} 数据抓取失败，跳过阈值检查`);
+          coinResults.push({
+            coin: coin.symbol,
+            success: false,
+            reason: 'scraping_failed',
+            currentRate: null
+          });
+        }
+
+        // 币种间添加短暂延迟
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+      } catch (error) {
+        console.error(`❌ ${coin.symbol} 抓取过程中发生错误:`, error.message);
+        coinResults.push({
+          coin: coin.symbol,
+          success: false,
+          reason: 'scraping_error',
+          error: error.message
+        });
+      }
+    }
+
+    // 检查该组所有币种的阈值
+    const triggeredCoins = [];
+    const now = new Date();
+
+    for (const coin of enabledCoins) {
+      const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+      const coinData = allCoinsData[coinKey];
+
+      if (!coinData) {
+        console.warn(`⚠️ 币种 ${coin.symbol} 数据不存在，跳过阈值检查`);
+        continue;
+      }
+
+      const currentRate = coinData.annual_rate;
+      console.log(`🔍 ${coin.symbol}: 当前利率 ${currentRate}% vs 阈值 ${coin.threshold}%`);
+
+      try {
+        const result = await checkGroupCoinThreshold(group, coin, currentRate, allCoinsData, globalConfig);
+        coinResults.push(result);
+
+        if (result.triggered) {
+          triggeredCoins.push({
+            ...coin,
+            current_rate: currentRate,
+            excess: ((currentRate - coin.threshold) / coin.threshold * 100).toFixed(1),
+            exchange: coin.exchange,
+            timeframe: coin.timeframe
+          });
+        }
+      } catch (error) {
+        console.error(`❌ 检查币种 ${coin.symbol} 阈值时发生异常:`, error);
+        coinResults.push({
+          coin: coin.symbol,
+          success: false,
+          reason: 'threshold_check_error',
+          error: error.message
+        });
+      }
+    }
+
+    // 如果该组有触发的币种，发送组邮件
+    let emailSent = false;
+    if (triggeredCoins.length > 0) {
+      console.log(`📧 ${group.name}: ${triggeredCoins.length} 个币种触发阈值，准备发送邮件`);
+      emailSent = await emailService.sendGroupAlert(group, triggeredCoins, allCoinsData, globalConfig);
+    }
+
+    // 检查是否有恢复通知需要发送
+    const recoveredCoins = [];
+    for (const result of coinResults) {
+      if (result.actions && result.actions.includes('recovery_marked')) {
+        // 找到对应的币种信息
+        const coinInfo = enabledCoins.find(c => c.symbol === result.coin);
+        if (coinInfo) {
+          recoveredCoins.push({
+            ...coinInfo,
+            current_rate: result.currentRate
+          });
+        }
+      }
+    }
+
+    // 如果有恢复的币种，发送恢复邮件
+    if (recoveredCoins.length > 0) {
+      console.log(`📧 ${group.name}: ${recoveredCoins.length} 个币种恢复到正常水平，准备发送恢复邮件`);
+      // 这里可以发送恢复邮件，或者包含在下一封触发邮件中
+      // 暂时记录日志，恢复通知可以包含在下次触发邮件中
+      for (const coin of recoveredCoins) {
+        console.log(`  - ${coin.symbol}: 已恢复到 ${coin.current_rate}% (阈值 ${coin.threshold}%)`);
+      }
+    }
+
+    return {
+      groupId: group.id,
+      groupName: group.name,
+      email: group.email,
+      triggeredCount: triggeredCoins.length,
+      recoveredCount: recoveredCoins.length,
+      enabledCoinsCount: enabledCoins.length,
+      triggeredCoins: triggeredCoins.map(c => c.symbol),
+      recoveredCoins: recoveredCoins.map(c => c.symbol),
+      emailSent,
+      coinResults,
+      success: true
+    };
+
+  } catch (error) {
+    console.error(`❌ 处理分组 ${group.name} 时发生异常:`, error);
+    return {
+      groupId: group.id,
+      groupName: group.name,
+      email: group.email,
+      triggeredCount: 0,
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * 检查分组中单个币种的阈值 - 新的分组监控逻辑
+ */
+async function checkGroupCoinThreshold(group, coin, currentRate, allCoinsData, globalConfig) {
+  // 使用复合键查找币种数据
+  const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+  let coinData = allCoinsData[coinKey];
+
+  // 如果复合键找不到，回退到简单键查找（向后兼容）
+  if (!coinData) {
+    coinData = allCoinsData[coin.symbol];
+    console.log(`⚠️ 复合键 ${coinKey} 未找到，使用简单键 ${coin.symbol} 查找`);
+  }
+
+  if (!coinData) {
+    loggerService.warn(`[阈值检查] 分组${group.name} 币种 ${coin.symbol} 数据不存在`);
+    console.log(`❌ 分组${group.name} 币种 ${coin.symbol} 数据不存在`);
+    return {
+      coin: coin.symbol,
+      success: false,
+      reason: 'data_not_found',
+      triggered: false
+    };
+  }
+
+  console.log(`✅ 找到币种数据: ${coin.symbol} (${coin.exchange}/${coin.timeframe}) -> 利率 ${currentRate}%`);
+
+  // 获取分组状态（而不是币种状态）
+  const state = await storageService.getGroupState(group.id);
+  const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+  const coinState = state.coin_states?.[coinStateKey] || { status: 'normal' };
+
+  const now = new Date();
+  const result = {
+    coin: coin.symbol,
+    currentRate,
+    threshold: coin.threshold,
+    previousState: coinState.status,
+    actions: [],
+    triggered: false
+  };
+
+  try {
+    // 状态机逻辑（复用原有逻辑，但使用分组状态）
+    if (currentRate > coin.threshold) {
+      // 利率超过阈值
+      if (coinState.status === 'normal' || !coinState.status) {
+        // 首次触发
+        if (isWithinNotificationHours(globalConfig)) {
+          // 在允许时间段内，标记需要发送邮件（统一在processGroupMonitoring中发送）
+          result.triggered = true;
+
+          // 更新分组状态中的币种状态
+          if (!state.coin_states) state.coin_states = {};
+          state.coin_states[coinStateKey] = {
+            status: 'alert',
+            last_notification: formatDateTime(now),
+            next_notification: formatDateTime(new Date(now.getTime() + globalConfig.repeat_interval * 60 * 1000)),
+            last_rate: currentRate
+          };
+          await storageService.updateGroupState(group.id, 'alert', state);
+
+          result.actions.push('alert_marked');
+          loggerService.info(`[阈值检查] 分组${group.name} 币种 ${coin.symbol} 触发警报，标记为待发送，利率 ${currentRate}% > ${coin.threshold}%`);
+          console.log(`分组${group.name} 币种 ${coin.symbol} 触发警报，标记为待发送分组邮件`);
+        } else {
+          // 非时间段内，延迟到下一个允许时间段
+          const nextNotificationTime = getNextNotificationTime(globalConfig);
+          await storageService.saveScheduledNotification(`${group.id}_${coin.symbol}`, 'alert', {
+            group,
+            coin,
+            currentRate,
+            rateData: { coins: allCoinsData },
+            config: globalConfig,
+            scheduled_time: formatDateTime(nextNotificationTime)
+          });
+
+          if (!state.coin_states) state.coin_states = {};
+          state.coin_states[coinStateKey] = {
+            status: 'alert',
+            last_rate: currentRate,
+            pending_notification: true
+          };
+          await storageService.updateGroupState(group.id, 'alert', state);
+
+          result.actions.push('alert_scheduled');
+          console.log(`分组${group.name} 币种 ${coin.symbol} 触发警报，但不在通知时间段内，已安排在 ${formatDateTimeCN(nextNotificationTime)} 发送`);
+        }
+      } else if (coinState.status === 'alert' && now >= new Date(coinState.next_notification)) {
+        // 冷却期结束，再次通知
+        if (isWithinNotificationHours(globalConfig)) {
+          // 标记需要发送重复邮件（统一在processGroupMonitoring中发送）
+          result.triggered = true;
+
+          if (!state.coin_states) state.coin_states = {};
+          state.coin_states[coinStateKey] = {
+            status: 'alert',
+            last_notification: formatDateTime(now),
+            next_notification: formatDateTime(new Date(now.getTime() + globalConfig.repeat_interval * 60 * 1000)),
+            last_rate: currentRate
+          };
+          await storageService.updateGroupState(group.id, 'alert', state);
+
+          result.actions.push('repeat_alert_marked');
+          console.log(`分组${group.name} 币种 ${coin.symbol} 重复警报，标记为待发送分组邮件`);
+        } else {
+          // 非时间段内，延迟到下一个允许时间段
+          const nextNotificationTime = getNextNotificationTime(globalConfig);
+          await storageService.saveScheduledNotification(`${group.id}_${coin.symbol}`, 'alert', {
+            group,
+            coin,
+            currentRate,
+            rateData: { coins: allCoinsData },
+            config: globalConfig,
+            scheduled_time: formatDateTime(nextNotificationTime)
+          });
+
+          if (!state.coin_states) state.coin_states = {};
+          state.coin_states[coinStateKey] = {
+            status: 'alert',
+            next_notification: formatDateTime(nextNotificationTime),
+            last_rate: currentRate
+          };
+          await storageService.updateGroupState(group.id, 'alert', state);
+
+          result.actions.push('repeat_alert_scheduled');
+          console.log(`分组${group.name} 币种 ${coin.symbol} 重复警报，但不在通知时间段内，已安排在 ${formatDateTimeCN(nextNotificationTime)} 发送`);
+        }
+      } else {
+        result.actions.push('in_cooling_period');
+      }
+    } else {
+      // 利率回落到阈值以下
+      if (coinState.status === 'alert') {
+        if (isWithinNotificationHours(globalConfig)) {
+          // 标记需要发送恢复通知（统一在processGroupMonitoring中处理）
+          if (!state.coin_states) state.coin_states = {};
+          state.coin_states[coinStateKey] = {
+            status: 'normal',
+            last_rate: currentRate
+          };
+          await storageService.updateGroupState(group.id, 'normal', state);
+
+          result.actions.push('recovery_marked');
+          console.log(`分组${group.name} 币种 ${coin.symbol} 回落通知，标记为待发送分组邮件`);
+        } else {
+          // 非时间段内，延迟到下一个允许时间段
+          const nextNotificationTime = getNextNotificationTime(globalConfig);
+          await storageService.saveScheduledNotification(`${group.id}_${coin.symbol}`, 'recovery', {
+            group,
+            coin,
+            currentRate,
+            config: globalConfig,
+            scheduled_time: formatDateTime(nextNotificationTime)
+          });
+
+          if (!state.coin_states) state.coin_states = {};
+          state.coin_states[coinStateKey] = {
+            status: 'normal',
+            last_rate: currentRate,
+            pending_notification: true
+          };
+          await storageService.updateGroupState(group.id, 'normal', state);
+
+          result.actions.push('recovery_scheduled');
+          console.log(`分组${group.name} 币种 ${coin.symbol} 回落通知，但不在通知时间段内，已安排在 ${formatDateTimeCN(nextNotificationTime)} 发送`);
+        }
+      } else {
+        result.actions.push('already_normal');
+      }
+    }
+
+    result.success = true;
+    // 不再更新币种状态，因为现在使用分组状态管理
+
+  } catch (error) {
+    console.error(`检查分组${group.name} 币种 ${coin.symbol} 阈值时发生异常:`, error);
+    result.success = false;
+    result.error = error.message;
+  }
+
+  return result;
+}
+
+/**
+ * 向下兼容：运行原有的单币种监控逻辑
+ */
+async function runLegacyMonitoring(config) {
+  try {
+  const logPrefix = '[传统监控]';
+  loggerService.info(`${logPrefix} 使用传统监控模式`);
+  console.log('2. 使用传统模式执行监控...');
+
+  // 原有的监控逻辑，保持不变
+  loggerService.info(`${logPrefix} 触发条件满足，开始按币种独立抓取 CoinGlass 数据`);
+  console.log('3. 触发条件满足，开始按币种独立抓取 CoinGlass 数据...');
+
+  // 3. 按币种独立抓取数据（修复：使用每个币种的独立配置）
+  const enabledCoins = config.coins.filter(c => c.enabled);
+  const allCoinsData = {};
+  const results = [];
+
+  loggerService.info(`${logPrefix} 准备按独立配置抓取币种: ${enabledCoins.map(c => `${c.symbol}(${c.exchange}/${c.timeframe})`).join(', ')}`);
+  console.log(`🎯 准备按独立配置抓取币种:`);
+  enabledCoins.forEach(coin => {
+    console.log(`  - ${coin.symbol}: 交易所=${coin.exchange}, 颗粒度=${coin.timeframe}`);
+  });
 
     // 为每个启用的币种独立抓取数据
     for (const coin of enabledCoins) {
@@ -471,28 +909,70 @@ async function checkPendingNotifications(config) {
 
         // 如果已到发送时间，发送通知
         if (now >= scheduledTime) {
-          console.log(`发送延迟通知: ${notification.coin} ${notification.type}`);
+          const isGroupNotification = notification.data.isGroupNotification;
+          const coinSymbol = notification.data.coin?.symbol || notification.coin;
+          const coinInfo = notification.data.coin;
+
+          if (isGroupNotification) {
+            console.log(`发送分组延迟通知: ${notification.data.group?.name} - ${coinSymbol} ${notification.type}`);
+          } else {
+            console.log(`发送延迟通知: ${coinSymbol} ${notification.type}`);
+          }
 
           let success = false;
           if (notification.type === 'alert') {
-            success = await emailService.sendAlert(
-              notification.data.coin,
-              notification.data.currentRate,
-              notification.data.rateData,
-              notification.data.config
-            );
+            if (isGroupNotification && notification.data.group) {
+              // 发送分组警报邮件
+              const group = notification.data.group;
+              const triggeredCoins = [{
+                ...coinInfo,
+                current_rate: notification.data.currentRate,
+                excess: ((notification.data.currentRate - coinInfo.threshold) / coinInfo.threshold * 100).toFixed(1),
+                exchange: coinInfo.exchange,
+                timeframe: coinInfo.timeframe
+              }];
+
+              success = await emailService.sendGroupAlert(
+                group,
+                triggeredCoins,
+                notification.data.rateData?.coins || {},
+                notification.data.config
+              );
+            } else {
+              // 向下兼容：发送单币种警报邮件
+              success = await emailService.sendAlert(
+                coinInfo,
+                notification.data.currentRate,
+                notification.data.rateData,
+                notification.data.config
+              );
+            }
           } else if (notification.type === 'recovery') {
-            success = await emailService.sendRecovery(
-              notification.data.coin,
-              notification.data.currentRate,
-              notification.data.config
-            );
+            if (isGroupNotification && notification.data.group) {
+              // 发送分组恢复邮件 - 可以使用恢复邮件模板或修改分组邮件
+              const group = notification.data.group;
+              console.log(`分组恢复通知: ${group.name} - ${coinSymbol} 已恢复到 ${notification.data.currentRate}%`);
+
+              // 暂时记录日志，恢复通知可以包含在下次触发邮件中
+              success = true; // 标记为成功，避免重复处理
+            } else {
+              // 向下兼容：发送单币种恢复邮件
+              success = await emailService.sendRecovery(
+                coinInfo,
+                notification.data.currentRate,
+                notification.data.config
+              );
+            }
           }
 
           if (success) {
             // 删除已处理的通知
             await storageService.deleteScheduledNotification(notification.key);
-            console.log(`延迟通知发送成功: ${notification.coin} ${notification.type}`);
+            if (isGroupNotification) {
+              console.log(`分组延迟通知发送成功: ${notification.data.group?.name} - ${coinSymbol} ${notification.type}`);
+            } else {
+              console.log(`延迟通知发送成功: ${coinSymbol} ${notification.type}`);
+            }
           }
         }
       } catch (error) {
@@ -505,27 +985,64 @@ async function checkPendingNotifications(config) {
 }
 
 /**
- * 获取所有币种的当前状态
+ * 获取所有币种的当前状态（支持分组监控）
  */
 export async function getAllCoinsStatus() {
   try {
     const config = await storageService.getConfig();
-    if (!config || !config.coins) {
+    if (!config) {
       return [];
     }
 
     const statusList = [];
-    for (const coin of config.coins) {
-      const state = await storageService.getCoinState(coin.symbol);
-      statusList.push({
-        symbol: coin.symbol,
-        threshold: coin.threshold,
-        enabled: coin.enabled,
-        state: state.status || 'normal',
-        last_notification: state.last_notification,
-        next_notification: state.next_notification,
-        last_rate: state.last_rate
-      });
+
+    // 检查是否使用新的分组格式
+    if (config.email_groups && config.email_groups.length > 0) {
+      // 使用分组监控格式
+      for (const group of config.email_groups) {
+        const groupState = await storageService.getGroupState(group.id);
+
+        for (const coin of group.coins) {
+          const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+          const coinState = groupState.coin_states?.[coinStateKey] || { status: 'normal' };
+
+          statusList.push({
+            symbol: coin.symbol,
+            exchange: coin.exchange,
+            timeframe: coin.timeframe,
+            threshold: coin.threshold,
+            enabled: coin.enabled,
+            group_id: group.id,
+            group_name: group.name,
+            group_email: group.email,
+            state: coinState.status || 'normal',
+            last_notification: coinState.last_notification,
+            next_notification: coinState.next_notification,
+            last_rate: coinState.last_rate,
+            pending_notification: coinState.pending_notification
+          });
+        }
+      }
+    } else if (config.coins) {
+      // 向下兼容：使用旧的币种监控格式
+      for (const coin of config.coins) {
+        const state = await storageService.getCoinState(coin.symbol);
+        statusList.push({
+          symbol: coin.symbol,
+          exchange: coin.exchange || 'binance',
+          timeframe: coin.timeframe || '1h',
+          threshold: coin.threshold,
+          enabled: coin.enabled,
+          group_id: null,
+          group_name: null,
+          group_email: config.email || null,
+          state: state.status || 'normal',
+          last_notification: state.last_notification,
+          next_notification: state.next_notification,
+          last_rate: state.last_rate,
+          pending_notification: state.pending_notification
+        });
+      }
     }
 
     return statusList;

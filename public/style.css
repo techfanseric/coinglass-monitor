@@ -231,20 +231,34 @@ body {
 
 @media (max-width: 600px) {
     .header-main {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 12px;
         padding: 16px;
+        gap: 8px;
     }
 
     .header-title {
-        text-align: center;
-        width: 100%;
+        flex: 1;
     }
 
-    .header-info {
-        width: 100%;
-        justify-content: center;
+    .header-title h1 {
+        font-size: 1.1em;
+    }
+
+    .header-title p {
+        font-size: 0.8em;
+    }
+
+    .version-info {
+        padding: 4px 8px;
+        gap: 6px;
+    }
+
+    .version-badge {
+        font-size: 0.7em;
+        padding: 2px 6px;
+    }
+
+    .changelog-toggle {
+        font-size: 0.8em;
     }
 }
 
@@ -680,4 +694,392 @@ input:checked + .slider:before {
     .add-monitor-row select {
         min-width: auto;
     }
+}
+
+/* 邮件分组样式 */
+.email-group {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+    background: #f9fafb;
+    transition: border-color 0.2s ease;
+}
+
+.email-group:hover {
+    border-color: #d1d5db;
+}
+
+.group-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.group-title-section {
+    display: flex;
+    align-items: center;
+    flex: 1;
+}
+
+.group-header h3 {
+    margin: 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #374151;
+}
+
+.group-email {
+    margin-bottom: 16px;
+}
+
+.group-email label {
+    display: block;
+    font-size: 0.875em;
+    font-weight: 500;
+    color: #4b5563;
+    margin-bottom: 4px;
+}
+
+.group-email input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    font-size: 0.875em;
+    transition: border-color 0.2s ease;
+}
+
+.group-email input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.group-coins {
+    margin-bottom: 12px;
+}
+
+.group-coins label {
+    display: block;
+    font-size: 0.875em;
+    font-weight: 500;
+    color: #4b5563;
+    margin-bottom: 8px;
+}
+
+.coins-list {
+    margin-bottom: 12px;
+}
+
+.coin-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    font-size: 0.875em;
+}
+
+.coin-info {
+    color: #374151;
+    flex: 1;
+}
+
+.remove-btn {
+    background: #ef4444;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s ease;
+}
+
+.remove-btn:hover {
+    background: #dc2626;
+}
+
+.add-coin-form {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 12px;
+    background: #f3f4f6;
+    border-radius: 6px;
+    border: 1px dashed #d1d5db;
+}
+
+.add-coin-form input,
+.add-coin-form select {
+    padding: 6px 8px;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    font-size: 0.875em;
+    min-width: 80px;
+}
+
+.add-coin-form input:focus,
+.add-coin-form select:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.add-coin-form button {
+    padding: 6px 12px;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.875em;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.add-coin-form button:hover {
+    background: #2563eb;
+}
+
+.add-coin-form .btn-secondary {
+    background-color: #6c757d;
+    padding: 6px 12px;
+    font-size: 0.875em;
+}
+
+.add-coin-form .btn-secondary:hover {
+    background-color: #545b62;
+}
+
+.delete-btn {
+    background: transparent;
+    color: #ef4444;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 0.875em;
+    cursor: pointer;
+    transition: color 0.2s ease;
+}
+
+.delete-btn:hover {
+    color: #dc2626;
+}
+
+/* 响应式调整 */
+@media (max-width: 600px) {
+    .add-coin-form {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .add-coin-form input,
+    .add-coin-form select {
+        min-width: auto;
+        width: 100%;
+    }
+}
+
+/* 对话框样式 */
+.dialog-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.dialog {
+    background: white;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 500px;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.dialog-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    border-bottom: 1px solid #eee;
+}
+
+.dialog-header h3 {
+    margin: 0;
+    color: #333;
+    font-size: 18px;
+}
+
+.dialog-header .close-btn {
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #666;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dialog-header .close-btn:hover {
+    color: #333;
+}
+
+.dialog-content {
+    padding: 20px;
+}
+
+.dialog-content .form-group {
+    margin-bottom: 16px;
+}
+
+.dialog-content .form-group label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 500;
+    color: #555;
+}
+
+.dialog-content .form-group input,
+.dialog-content .form-group select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.dialog-content .form-group input:focus,
+.dialog-content .form-group select:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+.dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 20px;
+    border-top: 1px solid #eee;
+    background-color: #f8f9fa;
+}
+
+.btn-primary {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.btn-primary:hover {
+    background-color: #0056b3;
+}
+
+.btn-secondary {
+    background-color: #6c757d;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.btn-secondary:hover {
+    background-color: #545b62;
+}
+
+/* 邮件分组中简化的币种样式 */
+.coin-item-simple {
+    background-color: white;
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin-bottom: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: border-color 0.2s ease;
+    position: relative;
+    min-height: 32px; /* 与输入框高度保持一致 */
+}
+
+.coin-item-simple:hover {
+    border-color: #ced4da;
+}
+
+.coin-text {
+    flex: 1;
+    color: #495057;
+    font-size: 13px;
+    line-height: 1.2;
+}
+
+.coin-text strong {
+    color: #212529;
+}
+
+.coin-actions {
+    display: flex;
+    align-items: center;
+}
+
+/* 邮件分组中小号更多菜单 */
+.more-btn-small {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    color: #6c757d;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: background-color 0.2s ease, color 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.more-btn-small:hover {
+    background-color: #f8f9fa;
+    color: #495057;
+}
+
+.more-dropdown-small {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    background-color: white;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    z-index: 100;
+    min-width: 120px;
+    margin-top: 2px;
+}
+
+.more-dropdown-small .more-dropdown-item {
+    padding: 8px 12px;
+    font-size: 13px;
 }

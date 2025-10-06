@@ -846,12 +846,181 @@ export async function sendMultiCoinAlert(triggeredCoins, rateData, config) {
   }
 }
 
+/**
+ * 发送分组警报邮件 - 新的邮件分组功能
+ */
+export async function sendGroupAlert(group, triggeredCoins, allCoinsData, globalConfig) {
+  console.log(`发送分组警报: ${group.name} - ${triggeredCoins.length} 个币种触发阈值`);
+  console.log(`🔍 分组信息: ID=${group.id}, 邮箱=${group.email}`);
+
+  try {
+    // 生成简洁的邮件标题
+    const maxCoinsInTitle = 3; // 每封邮件最多显示3个币种
+    const coinSummaries = triggeredCoins
+      .slice(0, maxCoinsInTitle)
+      .map(coin => `${coin.symbol}(${coin.current_rate}%)`)
+      .join(' ');
+
+    const title = `${group.name} | ${formatDateTime(new Date())} | ${coinSummaries}${
+      triggeredCoins.length > maxCoinsInTitle ? '...' : ''
+    }`;
+
+    console.log(`📧 邮件标题: ${title}`);
+
+    // 构建分组邮件数据
+    const groupAlertData = {
+      type: 'group_alert',
+      group: group, // 包含完整的 group 对象
+      group_name: group.name,
+      group_id: group.id,
+      group_email: group.email,
+      triggered_coins: triggeredCoins,
+      total_coins: group.coins.length,
+      timestamp: formatDateTime(new Date()),
+      detection_time: formatDateTimeCN(new Date()),
+      all_coins: allCoinsData
+    };
+
+    // 准备邮件数据
+    const emailData = prepareGroupAlertEmail(groupAlertData, globalConfig);
+
+    // 构建env对象
+    const env = {
+      EMAILJS_SERVICE_ID: process.env.EMAILJS_SERVICE_ID,
+      EMAILJS_TEMPLATE_ID: process.env.EMAILJS_TEMPLATE_ID,
+      EMAILJS_PUBLIC_KEY: process.env.EMAILJS_PUBLIC_KEY,
+      EMAILJS_PRIVATE_KEY: process.env.EMAILJS_PRIVATE_KEY
+    };
+
+    // 发送邮件
+    const success = await sendEmailJS(env, emailData);
+
+    if (success) {
+      console.log(`✅ 分组警报邮件发送成功: ${group.name} -> ${group.email}`);
+      console.log(`   触发币种: ${triggeredCoins.map(c => c.symbol).join(', ')}`);
+      // 记录发送历史
+      await storageService.recordEmailHistory(groupAlertData);
+    } else {
+      console.error(`❌ 分组警报邮件发送失败: ${group.name}`);
+    }
+
+    return success;
+  } catch (error) {
+    console.error('发送分组警报邮件异常:', error);
+    return false;
+  }
+}
+
+/**
+ * 准备分组警报邮件数据
+ */
+function prepareGroupAlertEmail(groupAlertData, globalConfig) {
+  const { group, triggered_coins: triggeredCoins, all_coins: allCoinsData } = groupAlertData;
+
+  // 格式化触发的币种数据
+  const formattedTriggeredCoins = triggeredCoins.map(coin => {
+    // 获取历史数据
+    const coinInfo = {
+      symbol: coin.symbol,
+      exchange: coin.exchange,
+      timeframe: coin.timeframe
+    };
+    const coinHistory = getCoinHistory(allCoinsData, coinInfo, globalConfig);
+
+    // 格式化交易所和时间框架显示
+    const exchangeDisplay = coin.exchange.charAt(0).toUpperCase() + coin.exchange.slice(1);
+    const timeframeDisplay = coin.timeframe === '1h' ? '1小时' : coin.timeframe === '24h' ? '24小时' : coin.timeframe;
+
+    return {
+      symbol: coin.symbol,
+      current_rate: coin.current_rate.toFixed(emailConfig.currencyDecimalPlaces),
+      threshold: coin.threshold.toFixed(emailConfig.currencyDecimalPlaces),
+      excess: coin.excess,
+      daily_rate: (coin.current_rate / 365).toFixed(emailConfig.currencyDecimalPlaces),
+      hourly_rate: (coin.current_rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces),
+      exchange_name: exchangeDisplay,
+      timeframe: timeframeDisplay,
+      exchange: coin.exchange,
+      timeframe_original: coin.timeframe,
+      history: coinHistory.slice(0, 5).map(h => {
+        const timeMatch = h.time ? h.time.match(/(\d{1,2}:\d{2})/) : null;
+        const timeStr = timeMatch ? timeMatch[1] : (h.time || 'N/A');
+        const rate = h.annual_rate || h.rate || 0;
+        return {
+          time: timeStr,
+          rate: rate.toFixed(emailConfig.currencyDecimalPlaces),
+          daily_rate: (rate / 365).toFixed(emailConfig.currencyDecimalPlaces),
+          hourly_rate: (rate / 365 / 24).toFixed(emailConfig.rateDecimalPlaces)
+        };
+      })
+    };
+  }).sort((a, b) => parseFloat(b.current_rate) - parseFloat(a.current_rate));
+
+  // 构建所有币种状态数组（该组所有币种）
+  const allCoinsStatus = group.coins.map(coin => {
+    const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+    const coinData = allCoinsData[coinKey];
+    const currentRate = coinData?.annual_rate || 0;
+
+    const exchangeDisplay = coin.exchange.charAt(0).toUpperCase() + coin.exchange.slice(1);
+    const timeframeDisplay = coin.timeframe === '1h' ? '1小时' : coin.timeframe === '24h' ? '24小时' : coin.timeframe;
+
+    return {
+      symbol: coin.symbol,
+      annual_rate: currentRate.toFixed(emailConfig.currencyDecimalPlaces),
+      threshold: coin.threshold.toFixed(emailConfig.currencyDecimalPlaces),
+      is_above_threshold: currentRate > coin.threshold,
+      exchange_info: `${exchangeDisplay} (${timeframeDisplay})`
+    };
+  }).sort((a, b) => a.symbol.localeCompare(b.symbol));
+
+  // 生成邮件标题
+  const maxCoinsInTitle = 3;
+  const coinSummaries = formattedTriggeredCoins.slice(0, maxCoinsInTitle)
+    .map(coin => `${coin.symbol}(${coin.current_rate}%)`)
+    .join(' ');
+  const title = `${group.name} | ${formatDateTime(new Date())} | ${coinSummaries}${
+    formattedTriggeredCoins.length > maxCoinsInTitle ? '...' : ''
+  }`;
+
+  // 生成监控设置信息
+  const monitoringSettings = generateMonitoringSettingsInfo(globalConfig);
+
+  return {
+    service_id: process.env.EMAILJS_SERVICE_ID,
+    template_id: process.env.EMAILJS_TEMPLATE_ID,
+    user_id: process.env.EMAILJS_PUBLIC_KEY,
+    template_params: {
+      to_email: groupAlertData.group_email,
+      subject: title,
+      exchange_name: 'CoinGlass监控',
+      detection_time: groupAlertData.detection_time,
+      // 分组信息
+      group_name: groupAlertData.group_name,
+      group_id: groupAlertData.group_id,
+      // 多币种数组结构
+      triggered_count: formattedTriggeredCoins.length,
+      triggered_coins: formattedTriggeredCoins,
+      all_coins_status: allCoinsStatus,
+      total_coins: allCoinsStatus.length,
+      check_interval: '每小时',
+      next_check_time: formatDateTime(calculateNextCheckTime(globalConfig)),
+      // 交易所和时间框架信息
+      exchanges_display: monitoringSettings.exchanges,
+      exchanges_detail: monitoringSettings.exchanges_detail,
+      // 完整的监控设置信息
+      monitoring_settings: monitoringSettings
+    }
+  };
+}
+
 // 导出邮件服务
 export const emailService = {
   sendAlert,
   sendRecovery,
   sendTestEmail,
-  sendMultiCoinAlert
+  sendMultiCoinAlert,
+  sendGroupAlert  // 新增的分组邮件发送功能
 };
 
 // 导出测试用的函数

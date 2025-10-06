@@ -21,16 +21,46 @@ router.get('/', async (req, res) => {
     const config = await storageService.getConfig();
     const state = await storageService.getState();
 
-    // 获取币种状态
+    // 获取币种状态（支持分组监控）
     const coinStates = {};
-    if (config && config.coins) {
-      for (const coin of config.coins) {
-        if (coin.enabled) {
-          const coinState = await storageService.getCoinState(coin.symbol);
-          coinStates[coin.symbol] = {
-            ...coinState,
-            last_rate: coinState.last_rate
-          };
+    let coinsArray = [];
+
+    if (config) {
+      // 检查是否使用新的分组格式
+      if (config.email_groups && config.email_groups.length > 0) {
+        // 使用分组监控格式
+        for (const group of config.email_groups) {
+          const groupState = await storageService.getGroupState(group.id);
+
+          for (const coin of group.coins) {
+            const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+            const coinState = groupState.coin_states?.[coinStateKey] || { status: 'normal' };
+
+            coinStates[coin.symbol] = {
+              ...coinState,
+              last_rate: coinState.last_rate
+            };
+
+            // 添加到币种数组（用于前端兼容性）
+            coinsArray.push({
+              ...coin,
+              group_id: group.id,
+              group_name: group.name,
+              group_email: group.email
+            });
+          }
+        }
+      } else if (config.coins) {
+        // 向下兼容：使用旧的币种监控格式
+        coinsArray = config.coins;
+        for (const coin of config.coins) {
+          if (coin.enabled) {
+            const coinState = await storageService.getCoinState(coin.symbol);
+            coinStates[coin.symbol] = {
+              ...coinState,
+              last_rate: coinState.last_rate
+            };
+          }
         }
       }
     }
@@ -43,11 +73,16 @@ router.get('/', async (req, res) => {
       node_version: process.version,
       memory_usage: process.memoryUsage(),
       config_loaded: !!config,
-      monitoring_enabled: config?.monitoring_enabled || false,
-      configured_coins: config?.coins?.filter(c => c.enabled).length || 0,
-      active_states: Object.keys(state).filter(key => key.startsWith('coin_')).length,
+      monitoring_enabled: false, // 移除全局监控，改为组级别控制
+      configured_coins: coinsArray.filter(c => c.enabled).length || 0,
+      enabled_groups: config?.email_groups?.filter(g => g.enabled !== false).length || 0,
+      total_groups: config?.email_groups?.length || 0,
+      active_states: Object.keys(state).filter(key => key.startsWith('coin_') || key.startsWith('group_')).length,
       data_directory: process.env.DATA_DIR || './data',
       logs_directory: process.env.LOGS_DIR || './logs',
+      // 向前端兼容：返回config信息
+      config: config || {},
+      // 监控状态信息
       monitoring_status: {
         coins_state: coinStates
       }
@@ -273,8 +308,8 @@ router.post('/cleanup', async (req, res) => {
       success: cleanupResult.success,
       message: cleanupResult.success ? '系统清理完成' : '系统清理部分完成',
       data: {
-        totalCleaned: cleanupResult.totalCleaned,
-        totalSize: cleanupResult.totalSize,
+        summary: cleanupResult.summary,
+        details: cleanupResult.details,
         duration: cleanupResult.duration,
         directories: cleanupResult.directories,
         errors: cleanupResult.errors

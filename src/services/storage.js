@@ -44,6 +44,20 @@ export class StorageService {
     try {
       const data = await fs.readFile(this.configPath, 'utf8');
       const config = JSON.parse(data);
+
+      // 检查是否需要迁移到新的分组格式
+      if (!config.email_groups && config.coins) {
+        console.log('🔄 检测到旧配置格式，开始自动迁移到邮件分组格式...');
+        const migratedConfig = this.migrateConfigToEmailGroups(config);
+
+        // 保存迁移后的配置
+        await this.saveConfig(migratedConfig);
+        console.log('✅ 配置迁移完成');
+        loggerService.info('[存储服务] 配置已自动迁移到邮件分组格式');
+
+        return migratedConfig;
+      }
+
       // 静默处理配置读取，避免干扰系统日志
       return config;
     } catch (error) {
@@ -68,6 +82,56 @@ export class StorageService {
     } catch (error) {
       console.error('❌ 配置保存失败:', error);
       return false;
+    }
+  }
+
+/**
+   * 将旧配置迁移到新的邮件分组格式
+   */
+  migrateConfigToEmailGroups(oldConfig) {
+    try {
+      // 验证旧配置的完整性
+      if (!oldConfig.coins || !Array.isArray(oldConfig.coins)) {
+        console.warn('⚠️ 旧配置中没有找到有效的币种列表，创建默认分组');
+        return this.getDefaultConfig();
+      }
+
+      // 创建新的分组配置
+      const newConfig = {
+        monitoring_enabled: oldConfig.monitoring_enabled !== false,
+        email_groups: [
+          {
+            id: 'group_1',
+            name: '邮件1',
+            email: oldConfig.email || '',
+            coins: oldConfig.coins.map(coin => ({
+              symbol: coin.symbol,
+              exchange: coin.exchange || 'binance',
+              timeframe: coin.timeframe || '1h',
+              threshold: coin.threshold || 5.0,
+              enabled: coin.enabled !== false
+            }))
+          }
+        ],
+        trigger_settings: oldConfig.trigger_settings || {
+          hourly_minute: 0,
+          daily_hour: 9,
+          daily_minute: 0
+        },
+        notification_hours: oldConfig.notification_hours || {
+          enabled: false,
+          start: '09:00',
+          end: '23:59'
+        },
+        repeat_interval: oldConfig.repeat_interval || 180
+      };
+
+      console.log(`📦 迁移完成: 创建了1个邮件分组，包含 ${oldConfig.coins.length} 个币种`);
+      return newConfig;
+    } catch (error) {
+      console.error('❌ 配置迁移失败:', error);
+      console.log('🔄 返回默认配置');
+      return this.getDefaultConfig();
     }
   }
 
@@ -117,7 +181,31 @@ export class StorageService {
   }
 
   /**
-   * 更新特定币种的状态
+   * 获取分组状态
+   */
+  async getGroupState(groupId) {
+    try {
+      const state = await this.getState();
+      const groupState = state[`group_${groupId}`] || {
+        status: 'normal',
+        coin_states: {},
+        last_notification: null,
+        next_notification: null
+      };
+      return groupState;
+    } catch (error) {
+      console.error(`❌ 获取分组 ${groupId} 状态失败:`, error);
+      return {
+        status: 'normal',
+        coin_states: {},
+        last_notification: null,
+        next_notification: null
+      };
+    }
+  }
+
+  /**
+   * 更新特定币种的状态（保持向下兼容）
    */
   async updateCoinState(coinSymbol, status, data = {}) {
     try {
@@ -137,6 +225,33 @@ export class StorageService {
       return true;
     } catch (error) {
       console.error(`❌ 更新币种 ${coinSymbol} 状态失败:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * 更新分组状态
+   */
+  async updateGroupState(groupId, status, data = {}) {
+    try {
+      const state = await this.getState();
+      const currentGroupState = await this.getGroupState(groupId);
+
+      state[`group_${groupId}`] = {
+        status,
+        coin_states: data.coin_states || currentGroupState.coin_states,
+        last_notification: data.last_notification || currentGroupState.last_notification,
+        next_notification: data.next_notification || currentGroupState.next_notification,
+        updated_at: formatDateTime(new Date()),
+        ...data
+      };
+
+      await this.saveState(state);
+      loggerService.info(`[存储服务] 分组 ${groupId} 状态更新: ${status}`);
+      console.log(`💾 分组 ${groupId} 状态更新: ${status}`);
+      return true;
+    } catch (error) {
+      console.error(`❌ 更新分组 ${groupId} 状态失败:`, error);
       return false;
     }
   }
@@ -224,25 +339,34 @@ export class StorageService {
   /**
    * 保存待处理的通知
    */
-  async saveScheduledNotification(coinSymbol, type, data) {
+  async saveScheduledNotification(key, type, data) {
     try {
       const state = await this.getState();
-      const scheduledKey = `scheduled_${coinSymbol}_${Date.now()}`;
+      const scheduledKey = `scheduled_${key}_${Date.now()}`;
 
       if (!state.scheduled_notifications) {
         state.scheduled_notifications = {};
       }
 
+      // 扩展通知数据，支持分组信息
       state.scheduled_notifications[scheduledKey] = {
         type,
-        data,
-        coin: coinSymbol,
+        data: {
+          ...data,
+          isGroupNotification: !!data.group, // 标记是否为分组通知
+          notificationKey: key // 保存原始key，便于识别
+        },
+        coin: data.coin?.symbol || key, // 兼容旧的coin字段
         scheduled_time: data.scheduled_time,
         created_at: formatDateTime(new Date())
       };
 
       await this.saveState(state);
-      console.log(`📅 保存待处理通知: ${coinSymbol} ${type}`);
+      if (data.group) {
+        console.log(`📅 保存分组待处理通知: ${data.group.name} - ${data.coin?.symbol || key} ${type}`);
+      } else {
+        console.log(`📅 保存待处理通知: ${data.coin?.symbol || key} ${type}`);
+      }
       return true;
     } catch (error) {
       console.error('❌ 保存待处理通知失败:', error);
@@ -386,20 +510,21 @@ export class StorageService {
    */
   getDefaultConfig() {
     return {
-      email: '',
       monitoring_enabled: false,
-      filters: {
-        exchange: 'binance',
-        coin: 'USDT',
-        timeframe: '1h'
-      },
-      coins: [
+      email_groups: [
         {
-          symbol: 'USDT',
-          exchange: 'binance',
-          timeframe: '1h',
-          threshold: 5.0,
-          enabled: true
+          id: 'group_1',
+          name: '邮件1',
+          email: '',
+          coins: [
+            {
+              symbol: 'USDT',
+              exchange: 'binance',
+              timeframe: '1h',
+              threshold: 5.0,
+              enabled: true
+            }
+          ]
         }
       ],
       trigger_settings: {

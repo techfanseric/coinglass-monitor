@@ -29,69 +29,24 @@
         </div>
 
         <div class="content">
-            <div id="alerts"></div>
-
-            <!-- 主监控开关 -->
-            <div class="section">
-                <div class="main-toggle" id="mainToggleContainer">
-                    <h3 id="monitorStatusTitle">监控状态</h3>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="mainToggle" onchange="handleMainToggleChange()">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-            </div>
-
+            
             <!-- 两栏布局 -->
             <div class="two-column-layout">
-                <!-- 左栏：监控项目管理 -->
+                <!-- 左栏：邮件分组管理 -->
                 <div class="left-column">
-                    <!-- 添加监控 -->
+                    <!-- 邮件分组管理 -->
                     <div class="section">
-                        <h2>添加监控</h2>
-
-                        <div class="add-monitor-row">
-                            <div class="add-monitor-input">
-                                <label>交易所:</label>
-                                <select id="quickExchange">
-                                    <option value="binance">Binance</option>
-                                    <option value="okx">OKX</option>
-                                    <option value="bybit">Bybit</option>
-                                </select>
-                            </div>
-
-                            <div class="add-monitor-input">
-                                <label>币种:</label>
-                                <input type="text" id="quickCoin" placeholder="币种" value="USDT">
-                            </div>
-
-                            <div class="add-monitor-input">
-                                <label>颗粒度:</label>
-                                <select id="quickTimeframe">
-                                    <option value="1h">每小时</option>
-                                    <option value="24h">每天</option>
-                                </select>
-                            </div>
-
-                            <div class="add-monitor-input">
-                                <label>阈值%:</label>
-                                <input type="number" id="quickThreshold" placeholder="阈值%" step="0.1" min="0">
-                            </div>
-
-                            <button onclick="addMonitor()" class="btn" style="width: 100%;">添加监控</button>
-                        </div>
-                    </div>
-
-                    <!-- 监控列表 -->
-                    <div class="section">
-                        <div style="display: flex; align-items: center; margin-bottom: 12px; gap: 8px;">
-                            <h2 style="margin: 0;">监控列表</h2>
+                        <div style="display: flex; align-items: center; margin-bottom: 12px; gap: 8px; position: relative;">
+                            <h2 style="margin: 0;">邮件分组</h2>
                             <button id="triggerBtn" onclick="triggerMonitoring()" class="icon-btn" title="立即触发">▶</button>
                             <span id="triggerStatus" style="font-size: 12px; color: #6b7280; display: none;"></span>
                         </div>
-                        <div id="monitorList" class="monitor-list">
-                            <p style="text-align: center; color: #6b7280;">暂无监控项目</p>
+                        <div id="emailGroups">
+                            <p style="text-align: center; color: #6b7280;">暂无邮件分组</p>
                         </div>
+                        <button onclick="addEmailGroup()" class="btn" style="width: 100%; margin-top: 12px;">
+                            + 添加邮件
+                        </button>
                     </div>
                 </div>
 
@@ -100,10 +55,10 @@
                     <!-- 通知设置 -->
                     <div class="section">
                         <h2>通知设置</h2>
-
                         <div class="form-group">
-                            <label for="email">通知邮箱</label>
-                            <input type="email" id="email" placeholder="your-email@example.com" onchange="autoSaveConfig()">
+                            <p style="color: #6b7280; font-size: 14px; margin-bottom: 16px;">
+                                💡 邮箱地址请在左侧各邮件分组中单独设置
+                            </p>
                         </div>
 
                         <div class="form-group">
@@ -158,6 +113,10 @@
         </div>
     </div>
 
+    <!-- 模块化结构 -->
+    <script src="/modules/config-manager.js"></script>
+    <script src="/modules/monitor-ui.js"></script>
+    <script src="/modules/system-utils.js"></script>
     <script src="/script.js"></script>
 </body>
 </html>

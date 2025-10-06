@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 测试配置已根据实际 Jest 配置文件进行修正
 - 脚本功能已根据 package.json 中的实际脚本进行更新
 - 添加了 ES 模块和测试架构的具体说明
+- 新增 CHANGELOG.md 编写规范，确保更新日志面向用户
 
 ## Project Overview
 
@@ -288,7 +289,50 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 - 历史数据表格
 - 实时状态监控
 
+## CHANGELOG 编写规范
+
+### 📝 更新日志原则
+CHANGELOG.md 必须面向用户，关注功能改进和体验提升，避免技术细节：
+
+**✅ 应该包含**：
+- 功能改进（如"新增实时进度显示"）
+- 体验优化（如"页面加载更快"、"操作更流畅"）
+- 问题修复（如"修复邮件发送失败问题"）
+- 用户价值（如"节省存储空间"、"避免深夜打扰"）
+
+**❌ 避免包含**：
+- API端点变更（如"/api/scrape/status端点"）
+- 技术架构（如"前端模块化重构"）
+- 内部服务（如"ScrapeTracker服务"）
+- 代码细节（如"分离HTML、CSS文件"）
+
+**🔄 语言风格**：
+- 用用户能理解的通俗语言
+- 突出实际价值和体验改进
+- 保持简洁明了，每条不超过15字
+
+**📋 版本格式**：
+```json
+{
+  "version": "v25.10.6.9",
+  "date": "2025-10-06",
+  "description": "简要描述本次更新主题",
+  "changes": [
+    "🎯 功能改进1",
+    "⚡ 性能优化1",
+    "🐛 问题修复1"
+  ]
+}
+```
+
 ## 重要说明
+
+### ⚠️ Git 操作限制
+**重要**：未经用户明确许可，禁止执行任何 Git 操作，包括但不限于：
+- `git add .`
+- `git commit`
+- `git push`
+- 任何其他 Git 命令
 
 ### 监控脚本澄清
 - `npm run monitor` 运行的是 `src/services/monitor.js`（独立测试版本）
