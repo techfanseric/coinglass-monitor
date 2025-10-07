@@ -83,7 +83,6 @@ class SystemUtils {
         const logs = [
             `[${timestamp}] 📊 系统运行正常`,
             `[${timestamp}] 🔄 监控服务已启动`,
-            `[${timestamp}] ✅ 配置加载成功`,
             `[${timestamp}] 📋 监控项目: ${window.appState?.currentConfig?.coins?.length || 0} 个`,
             `[${timestamp}] 🔍 状态检查完成`
         ];
@@ -178,16 +177,16 @@ class SystemUtils {
     // 切换更新日志显示
     async toggleChangelog() {
         const container = document.getElementById('changelogContainer');
-        const toggle = document.getElementById('changelogToggle');
+        const arrow = document.getElementById('versionArrow');
 
         if (container.classList.contains('expanded')) {
             // 收起日志
             container.classList.remove('expanded');
-            toggle.textContent = '📋 更新日志';
+            arrow.classList.remove('expanded');
         } else {
             // 展开日志
             container.classList.add('expanded');
-            toggle.textContent = '📋 收起日志';
+            arrow.classList.add('expanded');
 
             // 首次展开时加载数据
             if (!this.changelogLoaded) {

@@ -46,6 +46,33 @@ document.addEventListener('DOMContentLoaded', function() {
     window.appSystem.setupEnhancedLogging();
 });
 
+// 退出登录功能
+async function logout() {
+    if (confirm('确定要退出登录吗？')) {
+        try {
+            // 调用退出API
+            const response = await fetch('/api/logout', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (response.ok) {
+                // 退出成功，重定向到登录页面
+                window.location.href = '/login';
+            } else {
+                // 即使API失败，也重定向到登录页面
+                window.location.href = '/login';
+            }
+        } catch (error) {
+            console.error('退出失败:', error);
+            // 即使网络错误，也重定向到登录页面
+            window.location.href = '/login';
+        }
+    }
+}
+
 // 初始化所有模块
 function initializeModules() {
     // 等待所有模块加载完成

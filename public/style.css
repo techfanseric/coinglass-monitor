@@ -71,7 +71,6 @@ body {
 .version-info:hover {
     background: #f1f5f9;
     border-color: #cbd5e0;
-    transform: translateY(-1px);
 }
 
 .version-badge {
@@ -83,6 +82,18 @@ body {
     border-radius: 12px;
 }
 
+.version-arrow {
+    font-size: 0.7em;
+    color: #718096;
+    margin-left: 2px;
+    transition: transform 0.2s ease;
+    display: inline-block;
+}
+
+.version-arrow.expanded {
+    transform: rotate(180deg);
+}
+
 .changelog-toggle {
     font-size: 0.875em;
     color: #718096;
@@ -91,6 +102,26 @@ body {
 
 .version-info:hover .changelog-toggle {
     color: #4a5568;
+}
+
+.logout-btn {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    padding: 6px 12px;
+    border-radius: 20px;
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    transition: all 0.2s ease;
+    margin-left: 8px;
+    font-size: 0.75em;
+    color: #dc2626;
+}
+
+.logout-btn:hover {
+    background: #fee2e2;
+    border-color: #f87171;
+    color: #b91c1c;
 }
 
 .changelog-container {
@@ -248,7 +279,7 @@ body {
     }
 
     .version-info {
-        padding: 4px 8px;
+        padding: 4px 8px 4px 4px;
         gap: 6px;
     }
 
@@ -259,6 +290,11 @@ body {
 
     .changelog-toggle {
         font-size: 0.8em;
+    }
+
+    .logout-btn {
+        font-size: 0.7em;
+        padding: 4px 8px;
     }
 }
 

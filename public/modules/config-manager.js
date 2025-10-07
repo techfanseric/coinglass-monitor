@@ -18,7 +18,6 @@ class ConfigManager {
             if (config && Object.keys(config).length > 0) {
                 window.appState.currentConfig = config;
                 this.populateForm(config);
-                window.appUtils?.showAlert?.('配置加载成功', 'success');
                 return config;
             }
             return null;

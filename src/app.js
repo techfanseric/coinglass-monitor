@@ -360,6 +360,77 @@ app.use(cors({
 app.use(express.json({ limit: serverConfig.requestBodySizeLimit }));
 app.use(express.urlencoded({ extended: true, limit: serverConfig.requestBodySizeLimit }));
 
+// Cookie解析中间件 - 必须在会话验证之前
+app.use((req, res, next) => {
+  const cookies = req.headers.cookie?.split(';').reduce((acc, cookie) => {
+    const [key, value] = cookie.trim().split('=');
+    if (key && value) {
+      acc[key] = value;
+    }
+    return acc;
+  }, {}) || {};
+
+  req.cookies = cookies;
+
+  // 设置Cookie的辅助方法
+  res.setCookie = (name, value, options = {}) => {
+    let cookie = `${name}=${value}`;
+    if (options.maxAge) cookie += `; Max-Age=${options.maxAge}`;
+    if (options.httpOnly) cookie += '; HttpOnly';
+    if (options.path) cookie += `; Path=${options.path}`;
+    if (options.sameSite) cookie += `; SameSite=${options.sameSite}`;
+    console.log('🍪 设置Cookie:', cookie);
+    res.setHeader('Set-Cookie', cookie);
+  };
+
+  // 清除Cookie的辅助方法
+  res.clearCookie = (name) => {
+    console.log('🗑️ 清除Cookie:', name);
+    res.setHeader('Set-Cookie', `${name}=; Max-Age=0; Path=/`);
+  };
+
+  next();
+});
+
+// 简单的会话管理中间件 - 必须在Cookie解析之后
+const sessions = new Map();
+
+app.use((req, res, next) => {
+  const accessPassword = process.env.ACCESS_PASSWORD;
+
+  // 如果未设置密码或使用默认密码，跳过认证
+  if (!accessPassword || accessPassword === 'your-secure-password') {
+    return next();
+  }
+
+  // 检查登录页面、API登录接口和静态资源（CSS、JS、图片）
+  const publicPaths = ['/login', '/api/login', '/style.css', '/script.js', '/favicon.ico'];
+  if (publicPaths.includes(req.path) || req.path.startsWith('/.') || req.path.endsWith('.css') || req.path.endsWith('.js')) {
+    return next();
+  }
+
+  // 检查会话
+  const sessionId = req.cookies?.sessionId;
+
+  if (sessionId && sessions.has(sessionId)) {
+    // 检查会话是否过期（24小时）
+    const session = sessions.get(sessionId);
+
+    if (Date.now() - session.created < 24 * 60 * 60 * 1000) {
+      return next();
+    } else {
+      // 会话过期，删除
+      console.log('⏰ 会话过期，删除会话');
+      sessions.delete(sessionId);
+      res.clearCookie('sessionId');
+    }
+  }
+
+  // 重定向到登录页面
+  console.log('🔒 无有效会话，重定向到登录页面');
+  res.redirect('/login');
+});
+
 // 重写console.log以捕获所有日志输出
 const originalConsoleLog = console.log;
 const originalConsoleError = console.error;
@@ -443,6 +514,76 @@ app.use((req, res, next) => {
   }
 
   next();
+});
+
+// 登录页面路由
+app.get('/login', (req, res) => {
+  const accessPassword = process.env.ACCESS_PASSWORD;
+
+  // 如果未设置密码或使用默认密码，直接重定向到主页
+  if (!accessPassword || accessPassword === 'your-secure-password') {
+    return res.redirect('/');
+  }
+
+  // 如果已登录，重定向到主页
+  const sessionId = req.cookies?.sessionId;
+  if (sessionId && sessions.has(sessionId)) {
+    const session = sessions.get(sessionId);
+    if (Date.now() - session.created < 24 * 60 * 60 * 1000) {
+      return res.redirect('/');
+    }
+  }
+
+  // 显示登录页面
+  res.sendFile(path.join(__dirname, '..', 'public', 'login.html'));
+});
+
+// 登录验证API
+app.post('/api/login', (req, res) => {
+  const accessPassword = process.env.ACCESS_PASSWORD;
+
+  // 如果未设置密码或使用默认密码，直接成功
+  if (!accessPassword || accessPassword === 'your-secure-password') {
+    return res.json({ success: true });
+  }
+
+  const { password } = req.body;
+
+  if (!password) {
+    return res.status(400).json({ success: false, message: '请输入密码' });
+  }
+
+  if (password === accessPassword) {
+    // 生成会话ID
+    const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    sessions.set(sessionId, { created: Date.now() });
+
+    console.log('🔐 登录成功，设置会话:', { sessionId, totalSessions: sessions.size });
+
+    // 设置Cookie（24小时过期）
+    res.setCookie('sessionId', sessionId, {
+      maxAge: 24 * 60 * 60, // 24小时
+      httpOnly: true,
+      path: '/',
+      sameSite: 'Lax'
+    });
+
+    res.json({ success: true });
+  } else {
+    console.log('❌ 密码错误');
+    res.status(401).json({ success: false, message: '密码错误' });
+  }
+});
+
+// 登出API
+app.post('/api/logout', (req, res) => {
+  const sessionId = req.cookies?.sessionId;
+  if (sessionId && sessions.has(sessionId)) {
+    sessions.delete(sessionId);
+    res.clearCookie('sessionId');
+  }
+
+  res.json({ success: true });
 });
 
 // API 路由 - 必须在静态文件服务之前
