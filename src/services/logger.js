@@ -153,7 +153,7 @@ export class LoggerService {
       meta
     };
 
-    const logLine = `[${timestamp}] ${level.toUpperCase()}: ${message}`;
+    const logLine = `[${timestamp}]\n${level.toUpperCase()}: ${message}`;
 
     try {
       // 写入到统一的日志文件

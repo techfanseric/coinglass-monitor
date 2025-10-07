@@ -149,7 +149,6 @@ async function askToKillProcess(port, processInfo) {
   if (processInfo) {
     console.log(`进程信息: PID ${processInfo.pid}, 名称: ${processInfo.name}`);
   }
-  console.log('');
 
   // 在非交互环境下（如CI/CD），自动终止进程
   // 但在开发模式下仍然保持交互
@@ -162,7 +161,6 @@ async function askToKillProcess(port, processInfo) {
   console.log('📝 直接回车 = 自动关闭占用进程并继续启动');
   console.log('📝 Ctrl+C = 退出程序');
   console.log('⏱️  10秒后未选择将自动处理...');
-  console.log('');
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -371,10 +369,12 @@ console.log = function(...args) {
   // 调用原始console.log
   originalConsoleLog.apply(console, args);
 
-  // 写入到LoggerService
+  // 写入到LoggerService（仅当消息不为空时）
   try {
     const logMessage = args.join(' ');
-    loggerService.info(logMessage);
+    if (logMessage.trim()) {
+      loggerService.info(logMessage);
+    }
   } catch (error) {
     originalConsoleError('写入日志失败:', error.message);
   }
@@ -430,15 +430,14 @@ app.use((req, res, next) => {
     return next();
   }
 
-  const timestamp = formatDateTime(new Date());
-  const logMessage = `${timestamp} - ${req.method} ${req.url}\n`;
+  const logMessage = `${req.method} ${req.url}`;
 
   // 输出到控制台
-  console.log(`📡 ${logMessage.trim()}`);
+  console.log(`📡 ${logMessage}`);
 
   // 写入到LoggerService
   try {
-    loggerService.info(logMessage.trim());
+    loggerService.info(logMessage);
   } catch (error) {
     console.error('写入日志失败:', error.message);
   }
@@ -1000,7 +999,6 @@ async function performZipUpdate(zipUrl, newCommit, commitDate) {
 async function startServer() {
   try {
     console.log('🚀 CoinGlass 监控系统启动中...');
-    console.log('');
 
     // 环境准备
     await prepareEnvironment();

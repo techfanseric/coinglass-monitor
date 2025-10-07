@@ -14,11 +14,9 @@ import { formatDateTime, formatDateTimeCN } from '../utils/time-utils.js';
  */
 export async function runMonitoring() {
   const logPrefix = '[监控任务]';
-  loggerService.info(`${logPrefix} 开始执行监控任务`);
-  console.log('1. 开始执行监控任务...');
 
   try {
-    // 2. 获取用户配置
+    // 1. 获取用户配置
     const config = await storageService.getConfig();
     if (!config) {
       loggerService.warn(`${logPrefix} 未找到配置信息`);
@@ -26,18 +24,23 @@ export async function runMonitoring() {
       return { success: false, reason: 'no_config' };
     }
 
+    // 2. 检查当前时间是否满足监控条件（触发条件 + 时间限制）
+    const monitoringResult = shouldRunMonitoringWithReason(config);
+    if (!monitoringResult.shouldTrigger) {
+      loggerService.info(`${logPrefix} ${monitoringResult.reason}`);
+      console.log(`${logPrefix} ${monitoringResult.reason}`);
+      return { success: false, reason: 'monitoring_condition_not_met', details: monitoringResult.reason };
+    }
+
+    // 满足条件，开始执行监控任务
+    loggerService.info(`${logPrefix} 开始执行监控任务`);
+    console.log('1. 开始执行监控任务...');
+
     // 检查是否有邮件组配置
     if (!config.email_groups || !Array.isArray(config.email_groups) || config.email_groups.length === 0) {
       loggerService.warn(`${logPrefix} 未配置邮件组`);
       console.log('未配置邮件组');
       return { success: false, reason: 'no_email_groups' };
-    }
-
-    // 1. 检查当前时间是否满足触发条件
-    if (!shouldTriggerNow(config)) {
-      loggerService.info(`${logPrefix} 当前时间不满足触发条件，跳过本次监控`);
-      console.log('当前时间不满足触发条件，跳过本次监控');
-      return { success: false, reason: 'trigger_time_not_met' };
     }
 
     // 使用邮件组监控逻辑
@@ -129,8 +132,67 @@ async function processGroupMonitoring(group, globalConfig) {
       };
     }
 
-    console.log(`🎯 ${group.name}: 准备抓取 ${enabledCoins.length} 个币种`);
-    enabledCoins.forEach(coin => {
+    // 获取分组状态
+    const state = await storageService.getGroupState(group.id) || {
+      status: 'normal',
+      coin_states: {}
+    };
+
+    // 冷却期预检查 - 过滤掉不需要抓取的币种
+    const now = new Date();
+    const coinsToScrape = [];
+    const skippedCoins = [];
+
+    console.log(`🔄 ${group.name}: 冷却期预检查 ${enabledCoins.length} 个币种...`);
+
+    for (const coin of enabledCoins) {
+      const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+      const coinState = state.coin_states && state.coin_states[coinStateKey];
+
+      if (coinState && coinState.status === 'alert') {
+        const nextNotificationTime = new Date(coinState.next_notification);
+
+        if (now < nextNotificationTime) {
+          // 仍在冷却期内，跳过抓取
+          const remainingTime = Math.ceil((nextNotificationTime - now) / (1000 * 60)); // 分钟
+          console.log(`  - ${coin.symbol}: 跳过抓取，仍在冷却期内，距离下次通知还有 ${remainingTime} 分钟（下次通知时间：${formatDateTimeCN(nextNotificationTime)}）`);
+          skippedCoins.push({ coin, remainingTime, nextNotificationTime: formatDateTimeCN(nextNotificationTime) });
+          continue;
+        }
+        // 冷却期结束，需要检查
+      }
+      // 需要抓取检查的币种（首次检查或冷却期结束）
+      coinsToScrape.push(coin);
+    }
+
+    if (coinsToScrape.length === 0) {
+      console.log(`✅ ${group.name}: 所有币种都在冷却期内，无需抓取数据`);
+      return {
+        groupId: group.id,
+        groupName: group.name,
+        email: group.email,
+        triggeredCount: 0,
+        recoveredCount: 0,
+        enabledCoinsCount: enabledCoins.length,
+        skippedCoinsCount: skippedCoins.length,
+        skippedCoins,
+        emailSent: false,
+        coinResults: skippedCoins.map(s => ({
+          symbol: s.coin.symbol,
+          exchange: s.coin.exchange,
+          timeframe: s.coin.timeframe,
+          threshold: s.coin.threshold,
+          status: 'skipped_cooling',
+          reason: `仍在冷却期内，距离下次通知还有 ${s.remainingTime} 分钟`,
+          nextNotificationTime: s.nextNotificationTime
+        })),
+        success: true,
+        skipped: true
+      };
+    }
+
+    console.log(`🎯 ${group.name}: 准备抓取 ${coinsToScrape.length} 个币种（跳过 ${skippedCoins.length} 个冷却期币种）`);
+    coinsToScrape.forEach(coin => {
       console.log(`  - ${coin.symbol}: 交易所=${coin.exchange}, 颗粒度=${coin.timeframe}, 阈值=${coin.threshold}%`);
     });
 
@@ -138,7 +200,7 @@ async function processGroupMonitoring(group, globalConfig) {
     const allCoinsData = {};
     const coinResults = [];
 
-    for (const coin of enabledCoins) {
+    for (const coin of coinsToScrape) {
       try {
         console.log(`🔄 开始抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
 
@@ -180,9 +242,8 @@ async function processGroupMonitoring(group, globalConfig) {
 
     // 检查该组所有币种的阈值
     const triggeredCoins = [];
-    const now = new Date();
 
-    for (const coin of enabledCoins) {
+    for (const coin of coinsToScrape) {
       const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
       const coinData = allCoinsData[coinKey];
 
@@ -257,10 +318,32 @@ async function processGroupMonitoring(group, globalConfig) {
       triggeredCount: triggeredCoins.length,
       recoveredCount: recoveredCoins.length,
       enabledCoinsCount: enabledCoins.length,
+      scrapedCoinsCount: coinsToScrape.length,
+      skippedCoinsCount: skippedCoins.length,
       triggeredCoins: triggeredCoins.map(c => c.symbol),
       recoveredCoins: recoveredCoins.map(c => c.symbol),
+      skippedCoins: skippedCoins.map(s => ({
+        symbol: s.coin.symbol,
+        exchange: s.coin.exchange,
+        timeframe: s.coin.timeframe,
+        threshold: s.coin.threshold,
+        remainingTime: s.remainingTime,
+        nextNotificationTime: s.nextNotificationTime
+      })),
       emailSent,
-      coinResults,
+      coinResults: [
+        ...coinResults,
+        ...skippedCoins.map(s => ({
+          coin: s.coin.symbol,
+          exchange: s.coin.exchange,
+          timeframe: s.coin.timeframe,
+          threshold: s.coin.threshold,
+          status: 'skipped_cooling',
+          reason: `仍在冷却期内，距离下次通知还有 ${s.remainingTime} 分钟`,
+          nextNotificationTime: s.nextNotificationTime,
+          actions: ['in_cooling_period']
+        }))
+      ],
       success: true
     };
 
@@ -406,6 +489,9 @@ async function checkGroupCoinThreshold(group, coin, currentRate, allCoinsData, g
           console.log(`分组${group.name} 币种 ${coin.symbol} 重复警报，但不在通知时间段内，已安排在 ${formatDateTimeCN(nextNotificationTime)} 发送`);
         }
       } else {
+        const nextNotificationTime = new Date(coinState.next_notification);
+        const remainingTime = Math.ceil((nextNotificationTime - now) / (1000 * 60)); // 分钟
+        console.log(`分组${group.name} 币种 ${coin.symbol} 仍在冷却期内，距离下次通知还有 ${remainingTime} 分钟（下次通知时间：${formatDateTimeCN(nextNotificationTime)}）`);
         result.actions.push('in_cooling_period');
       }
     } else {
@@ -716,6 +802,9 @@ export async function checkCoinThreshold(coin, rateData, config) {
           console.log(`币种 ${coin.symbol} 重复警报，但不在通知时间段内，已安排在 ${formatDateTimeCN(nextNotificationTime)} 发送`);
         }
       } else {
+        const nextNotificationTime = new Date(state.next_notification);
+        const remainingTime = Math.ceil((nextNotificationTime - now) / (1000 * 60)); // 分钟
+        console.log(`币种 ${coin.symbol} 仍在冷却期内，距离下次通知还有 ${remainingTime} 分钟（下次通知时间：${formatDateTimeCN(nextNotificationTime)}）`);
         result.actions.push('in_cooling_period');
       }
     } else {
@@ -766,7 +855,7 @@ export async function checkCoinThreshold(coin, rateData, config) {
 }
 
 /**
- * 检查当前时间是否满足触发条件
+ * 检查当前时间是否满足触发条件，返回详细原因
  */
 function shouldTriggerNow(config) {
   const now = new Date();
@@ -792,6 +881,127 @@ function shouldTriggerNow(config) {
   }
 
   return false;
+}
+
+/**
+ * 检查当前时间是否满足触发条件，返回详细原因
+ */
+function shouldTriggerNowWithReason(config) {
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+
+  // 格式化时间显示
+  const timeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`;
+
+  // 如果没有配置触发设置，使用默认行为（每小时0分触发）
+  if (!config.trigger_settings) {
+    const shouldTrigger = currentMinute === 0;
+    if (!shouldTrigger) {
+      return {
+        shouldTrigger: false,
+        reason: `当前时间 ${timeStr} 不满足触发条件（默认每小时0分触发，需等到 ${currentHour}:00）`
+      };
+    }
+    return { shouldTrigger: true, reason: '' };
+  }
+
+  const triggerSettings = config.trigger_settings;
+  const hourlyMinute = triggerSettings.hourly_minute || 0;
+  const dailyHour = triggerSettings.daily_hour;
+  const dailyMinute = triggerSettings.daily_minute;
+
+  // 检查每时触发 - 总是启用
+  if (currentMinute === hourlyMinute) {
+    return { shouldTrigger: true, reason: '' };
+  }
+
+  // 检查每24时触发 - 总是启用
+  if (currentHour === dailyHour && currentMinute === dailyMinute) {
+    return { shouldTrigger: true, reason: '' };
+  }
+
+  // 构建详细的不满足原因
+  const nextHourly = `${String(currentHour).padStart(2, '0')}:${String(hourlyMinute).padStart(2, '0')}`;
+  const nextDaily = `${String(dailyHour).padStart(2, '0')}:${String(dailyMinute).padStart(2, '0')}`;
+
+  // 如果当前分钟已过每时触发时间，显示下一个小时的触发时间
+  const nextHourlyTime = currentMinute > hourlyMinute
+    ? `${String((currentHour + 1) % 24).padStart(2, '0')}:${String(hourlyMinute).padStart(2, '0')}`
+    : nextHourly;
+
+  // 如果今天已过每日触发时间，显示明天的触发时间
+  const nextDailyTime = (currentHour > dailyHour || (currentHour === dailyHour && currentMinute > dailyMinute))
+    ? `明天 ${nextDaily}`
+    : (currentHour < dailyHour || (currentHour === dailyHour && currentMinute < dailyMinute))
+      ? `今天 ${nextDaily}`
+      : `明天 ${nextDaily}`;
+
+  return {
+    shouldTrigger: false,
+    reason: `当前时间 ${timeStr} 不满足触发条件（每小时${hourlyMinute}分触发，下次：${nextHourlyTime}；每日${dailyHour}:${String(dailyMinute).padStart(2, '0')}触发，下次：${nextDailyTime}）`
+  };
+}
+
+/**
+ * 检查监控条件（触发条件 + 时间限制），返回详细原因
+ */
+function shouldRunMonitoringWithReason(config) {
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  const timeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`;
+
+  // 1. 检查触发条件
+  const triggerResult = shouldTriggerNowWithReason(config);
+  if (!triggerResult.shouldTrigger) {
+    return triggerResult; // 直接返回触发条件不满足的原因
+  }
+
+  // 2. 检查时间限制（满足触发条件时才检查）
+  if (config.notification_hours && config.notification_hours.enabled) {
+    const isWithinHours = isWithinNotificationHours(config);
+    if (!isWithinHours) {
+      const start = config.notification_hours.start;
+      const end = config.notification_hours.end;
+
+      // 计算下一个允许的通知时间
+      const startTime = parseTime(start);
+      const endTime = parseTime(end);
+      const currentTime = currentHour * 60 + currentMinute;
+
+      let nextNotificationTime = '';
+      if (startTime <= endTime) {
+        // 正常时间段
+        if (currentTime < startTime) {
+          nextNotificationTime = `今天 ${start}`;
+        } else {
+          nextNotificationTime = `明天 ${start}`;
+        }
+      } else {
+        // 跨天时间段
+        if (currentTime >= startTime || currentTime < endTime) {
+          // 当前在允许时间段内（这里不应该执行到，因为isWithinHours返回false）
+          nextNotificationTime = `当前时间 ${timeStr}`;
+        } else {
+          // 当前在不允许时间段，计算下一个允许时间
+          if (currentTime < startTime) {
+            nextNotificationTime = `今天 ${start}`;
+          } else {
+            nextNotificationTime = `明天 ${start}`;
+          }
+        }
+      }
+
+      return {
+        shouldTrigger: false,
+        reason: `当前时间 ${timeStr} 满足触发条件但不在通知时间段内（通知时间：${start}-${end}，下次通知时间：${nextNotificationTime}）`
+      };
+    }
+  }
+
+  // 3. 满足所有条件
+  return { shouldTrigger: true, reason: '' };
 }
 
 /**

@@ -487,8 +487,8 @@ class MonitorUI {
             // 获取最新日志
             const latestLog = status.logs[status.logs.length - 1] || '';
 
-            // 清理日志：去掉时间戳 [HH:MM:SS]
-            const cleanLog = latestLog.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
+            // 清理日志：去掉时间戳 [YYYY-MM-DD HH:MM:SS]
+            const cleanLog = latestLog.replace(/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s*/, '');
 
             // 根据日志内容设置颜色
             let color = '#374151'; // 默认深灰色
