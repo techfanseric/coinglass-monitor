@@ -13,6 +13,13 @@ class ConfigManager {
     async loadConfig() {
         try {
             const response = await fetch(`${this.apiBase}/api/config`);
+
+            // 检测302重定向（会话失效）
+            if (response.status === 302 || response.redirected) {
+                window.location.href = '/login';
+                return;
+            }
+
             const config = await response.json();
 
             if (config && Object.keys(config).length > 0) {
@@ -213,6 +220,20 @@ class ConfigManager {
                 },
                 body: JSON.stringify(config)
             });
+
+            // 检测302重定向（会话失效）
+            if (response.status === 302 || response.redirected) {
+                window.location.href = '/login';
+                return;
+            }
+
+            // 检查响应是否为JSON格式
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                // 如果不是JSON，可能是HTML重定向页面
+                window.location.href = '/login';
+                return;
+            }
 
             const result = await response.json();
 

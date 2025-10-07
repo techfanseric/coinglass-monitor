@@ -20,15 +20,13 @@ export async function runMonitoring() {
     const config = await storageService.getConfig();
     if (!config) {
       loggerService.warn(`${logPrefix} 未找到配置信息`);
-      console.log('未找到配置信息');
       return { success: false, reason: 'no_config' };
     }
 
     // 2. 检查当前时间是否满足监控条件（触发条件 + 时间限制）
     const monitoringResult = shouldRunMonitoringWithReason(config);
     if (!monitoringResult.shouldTrigger) {
-      loggerService.info(`${logPrefix} ${monitoringResult.reason}`);
-      console.log(`${logPrefix} ${monitoringResult.reason}`);
+      // 静默处理，不输出日志（这是正常行为）
       return { success: false, reason: 'monitoring_condition_not_met', details: monitoringResult.reason };
     }
 

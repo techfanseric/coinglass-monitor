@@ -142,6 +142,12 @@ class SystemUtils {
                 }
             });
 
+            // 检测302重定向（会话失效）
+            if (response.status === 302 || response.redirected) {
+                window.location.href = '/login';
+                return;
+            }
+
             if (response.ok) {
                 const result = await response.json();
                 this.showAlert('系统日志已清空', 'success');
@@ -199,6 +205,13 @@ class SystemUtils {
     async loadVersionInfo() {
         try {
             const response = await fetch('/api/version');
+
+            // 检测302重定向（会话失效）
+            if (response.status === 302 || response.redirected) {
+                window.location.href = '/login';
+                return;
+            }
+
             if (!response.ok) {
                 const versionBadge = document.getElementById('versionBadge');
                 if (versionBadge) {

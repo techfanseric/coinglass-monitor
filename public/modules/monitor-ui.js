@@ -73,6 +73,13 @@ class MonitorUI {
     async loadStatus(preserveTriggerState = false) {
         try {
             const response = await fetch(`${this.apiBase}/api/status`);
+
+            // 检测302重定向（会话失效）
+            if (response.status === 302 || response.redirected) {
+                window.location.href = '/login';
+                return;
+            }
+
             const data = await response.json();
 
             this.updateSystemStatus(true);
@@ -321,6 +328,12 @@ class MonitorUI {
                 body: JSON.stringify({ coinSymbol })
             });
 
+            // 检测302重定向（会话失效）
+            if (response.status === 302 || response.redirected) {
+                window.location.href = '/login';
+                return;
+            }
+
             const result = await response.json();
 
             if (result.success) {
@@ -392,6 +405,12 @@ class MonitorUI {
                                             body: JSON.stringify({})
                                         });
 
+                                        // 检测302重定向（会话失效）
+                                        if (finalResponse.status === 302 || finalResponse.redirected) {
+                                            window.location.href = '/login';
+                                            return;
+                                        }
+
                                         if (finalResponse.ok) {
                                             const finalData = await finalResponse.json();
                                             this.handleScrapeComplete(finalData, statusData.status);
@@ -422,6 +441,12 @@ class MonitorUI {
                 },
                 body: JSON.stringify({})
             }).then(async (response) => {
+                // 检测302重定向（会话失效）
+                if (response.status === 302 || response.redirected) {
+                    window.location.href = '/login';
+                    return;
+                }
+
                 if (!response.ok) {
                     const errorData = await response.json().catch(() => ({}));
                     throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
