@@ -40,13 +40,16 @@ This is a CoinGlass interest rate monitoring system based on a local Express ser
 
 ### Key Components
 - **本地文件存储**：使用本地文件系统存储配置、状态和邮件历史数据
+- **智能监控逻辑**：增强的冷却期预检查机制，跳过不需要抓取的币种，提升效率
 - **Hysteresis 通知系统**：通过智能冷却期防止垃圾邮件，保持原有状态机逻辑
+- **自动重启系统**：Windows和macOS启动脚本支持自动重启，应用崩溃后自动恢复
 - **跨平台支持**：支持Windows、macOS和Linux部署，统一配置系统
 - **启动脚本**：提供Windows PowerShell和macOS Bash脚本，智能环境检测和启动服务
+- **ZIP自动更新**：支持从GitHub ZIP包自动更新，包括解压和文件替换
 - **Puppeteer数据抓取**：使用Stealth插件避免反爬虫检测，支持调试截图
 - **EmailJS 集成**：EmailJS邮件通知系统，支持多币种通知模板
 - **定时监控服务**：集成在Express服务器中的定时任务系统，支持灵活触发时间
-- **日志管理**：完整的结构化日志记录和自动清理系统，支持实时查看
+- **日志管理**：完整的结构化日志记录和自动清理系统，支持实时查看，优化的日志显示顺序
 - **数据清理服务**：统一管理所有数据目录的自动清理，包括邮件历史、抓取数据、日志文件等
 - **时间工具模块**：提供统一的时间格式化函数，支持中英文时间显示
 - **ES模块架构**：使用"type": "module"支持现代ES6模块语法
@@ -78,10 +81,10 @@ npm run setup           # Run general setup script (auto-detects Chrome and crea
 
 ### Application Startup
 ```bash
-# Windows Batch startup script
+# Windows Batch startup script (with auto-restart)
 .\scripts\start-windows.bat
 
-# macOS Bash startup script
+# macOS Bash startup script (with auto-restart)
 ./scripts/start-mac.sh
 
 # Standard npm commands
@@ -90,6 +93,12 @@ npm run dev             # Start development server
 npm run dev:debug       # Start server with Node.js debugger
 npm run monitor         # Run monitoring service standalone
 ```
+
+**自动重启功能**：
+- Windows和macOS启动脚本现在都支持自动重启
+- 应用崩溃或停止后，会等待3秒自动重启
+- 使用Ctrl+C可以停止自动重启循环
+- 启动时会清屏并显示退出代码，便于调试
 
 ### Testing and Debugging
 ```bash
