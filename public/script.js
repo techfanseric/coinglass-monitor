@@ -124,6 +124,10 @@ function onTimeInputChange() {
     return window.appConfig.onTimeInputChange();
 }
 
+function autoSaveConfig() {
+    return window.appConfig.autoSaveConfig();
+}
+
 // 日志相关
 function copyLogs() {
     return window.appSystem.copyLogs();

@@ -178,15 +178,27 @@ router.post('/', async (req, res) => {
       // 不再使用 ...config 避免覆盖验证逻辑
     };
 
-    const success = await storageService.saveConfig(validatedConfig);
+    // 检查是否有配置被修改
+    const warnings = [];
+    let modifiedConfig = { ...validatedConfig };
+
+    // 检查通知时间设置是否被修改
+    if (JSON.stringify(config.notification_hours) !== JSON.stringify(validatedConfig.notification_hours)) {
+      warnings.push('通知时间设置已自动修正为有效格式');
+    }
+
+    const success = await storageService.saveConfig(modifiedConfig);
 
     if (success) {
       console.log('✅ 配置保存成功');
-      console.log('📧 邮件分组数量:', validatedConfig.email_groups?.length || 0);
-      console.log('💾 保存的配置结构:', Object.keys(validatedConfig));
+      console.log('📧 邮件分组数量:', modifiedConfig.email_groups?.length || 0);
+      console.log('💾 保存的配置结构:', Object.keys(modifiedConfig));
+
       res.json({
         success: true,
         message: '配置保存成功',
+        config: modifiedConfig, // 返回实际保存的配置
+        warnings: warnings,      // 返回警告信息
         timestamp: formatDateTime(new Date())
       });
     } else {

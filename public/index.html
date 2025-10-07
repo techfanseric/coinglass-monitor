@@ -66,17 +66,17 @@
 
                         <div class="form-group">
                             <label for="repeatInterval">重复通知间隔 (分钟)</label>
-                            <input type="number" id="repeatInterval" min="1" max="10080" value="180" placeholder="180" onchange="autoSaveConfig()">
+                            <input type="number" id="repeatInterval" min="1" max="10080" value="180" placeholder="180" onchange="window.appConfig.validateAndSaveConfig()">
                         </div>
 
                         <div class="form-group">
                             <label for="hourlyMinute">每小时触发时机 (分钟)</label>
-                            <input type="number" id="hourlyMinute" min="0" max="59" value="5" placeholder="5" onchange="autoSaveConfig()">
+                            <input type="number" id="hourlyMinute" min="0" max="59" value="5" placeholder="5" onchange="window.appConfig.validateAndSaveConfig()">
                         </div>
 
                         <div class="form-group">
                             <label for="dailyTime">每天触发时机 (H:MM)</label>
-                            <input type="time" id="dailyTime" value="09:05" onchange="autoSaveConfig()">
+                            <input type="time" id="dailyTime" value="09:05" onchange="window.appConfig.validateAndSaveConfig()">
                         </div>
 
                         <div class="form-group">
@@ -89,12 +89,12 @@
                         <div id="timeInputs" style="display: none;">
                             <div class="form-group">
                                 <label for="startTime">开始时间</label>
-                                <input type="time" id="startTime" value="09:00" onchange="onTimeInputChange(); autoSaveConfig()">
+                                <input type="time" id="startTime" value="09:00" onchange="window.appConfig.onTimeInputChangeAndSave()">
                             </div>
 
                             <div class="form-group">
                                 <label for="endTime">结束时间</label>
-                                <input type="time" id="endTime" value="23:59" onchange="onTimeInputChange(); autoSaveConfig()">
+                                <input type="time" id="endTime" value="23:59" onchange="window.appConfig.onTimeInputChangeAndSave()">
                             </div>
                         </div>
                     </div>

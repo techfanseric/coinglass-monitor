@@ -17,6 +17,10 @@ class ConfigManager {
 
             if (config && Object.keys(config).length > 0) {
                 window.appState.currentConfig = config;
+
+                // 检查并处理无效邮箱的邮件组
+                await this.validateAndHandleInvalidEmails(config);
+
                 this.populateForm(config);
                 return config;
             }
@@ -107,32 +111,97 @@ class ConfigManager {
         }
     }
 
+    // 配置变化检测
+    hasConfigChanged(newConfig) {
+        if (!window.appState.currentConfig) {
+            return true; // 首次保存
+        }
+
+        const current = window.appState.currentConfig;
+
+        // 深度比较函数
+        const deepEqual = (obj1, obj2) => {
+            if (obj1 === obj2) return true;
+            if (obj1 == null || obj2 == null) return false;
+            if (typeof obj1 !== typeof obj2) return false;
+
+            if (typeof obj1 !== 'object') return obj1 === obj2;
+
+            const keys1 = Object.keys(obj1);
+            const keys2 = Object.keys(obj2);
+
+            if (keys1.length !== keys2.length) return false;
+
+            for (let key of keys1) {
+                if (!keys2.includes(key)) return false;
+                if (!deepEqual(obj1[key], obj2[key])) return false;
+            }
+
+            return true;
+        };
+
+        // 比较关键字段
+        const currentConfig = {
+            repeat_interval: current.repeat_interval,
+            trigger_settings: current.trigger_settings,
+            notification_hours: current.notification_hours,
+            email_groups: current.email_groups
+        };
+
+        const configToCompare = {
+            repeat_interval: newConfig.repeat_interval,
+            trigger_settings: newConfig.trigger_settings,
+            notification_hours: newConfig.notification_hours,
+            email_groups: newConfig.email_groups
+        };
+
+        return !deepEqual(currentConfig, configToCompare);
+    }
+
     // 自动保存配置
     async autoSaveConfig() {
-        // 验证时间配置
-        if (!this.validateTimeConfig()) {
-            return; // 验证失败时中止保存
+        // 验证所有输入字段
+        const inputValidation = this.validateAllInputs();
+        if (!inputValidation.isValid) {
+            window.appUtils?.showAlert?.(inputValidation.message, 'error');
+            this.restoreInvalidInputs(inputValidation.restoreValues);
+            return;
         }
 
         const timeControl = document.getElementById('timeControl');
         const startTime = document.getElementById('startTime').value;
         const endTime = document.getElementById('endTime').value;
 
+        // 预验证时间配置
+        const timeValidation = this.preValidateTimeConfig(timeControl, startTime, endTime);
+
+        if (!timeValidation.isValid) {
+            // 验证失败，更新UI状态并中止保存
+            this.updateTimeUIState(timeValidation.correctedState);
+            window.appUtils?.showAlert?.(timeValidation.message, 'warning');
+            return; // 中止保存，保持UI状态与数据一致
+        }
+
+        // 使用验证后的数据进行保存
         const config = {
             // 使用新的邮件分组结构
             email_groups: window.appState.currentConfig?.email_groups || [],
-            repeat_interval: parseInt(document.getElementById('repeatInterval').value),
+            repeat_interval: inputValidation.values.repeatInterval,
             // 移除全局监控开关，改为组级别控制
             trigger_settings: {
-                hourly_minute: parseInt(document.getElementById('hourlyMinute').value) || 5,
-                daily_time: document.getElementById('dailyTime').value || '09:05'
+                hourly_minute: inputValidation.values.hourlyMinute,
+                daily_time: inputValidation.values.dailyTime
             },
-            notification_hours: {
-                enabled: timeControl.checked,
-                start: startTime,
-                end: endTime
-            }
+            notification_hours: timeValidation.data // 使用验证后的数据
         };
+
+        // 检查配置是否真的发生了变化
+        if (!this.hasConfigChanged(config)) {
+            console.log('🔄 配置未发生变化，跳过保存');
+            return; // 配置未变化，直接返回
+        }
+
+        console.log('💾 检测到配置变化，开始保存');
 
         // 移除全局监控状态检查，改为组级别控制
 
@@ -145,12 +214,20 @@ class ConfigManager {
                 body: JSON.stringify(config)
             });
 
-            if (response.ok) {
-                window.appState.currentConfig = config;
-                window.appUtils?.showAlert?.('配置保存成功', 'success');
-                // 移除全局监控开关状态更新
+            const result = await response.json();
+
+            if (response.ok && result.success) {
+                // 检查后端是否有修改
+                if (result.warnings && result.warnings.length > 0) {
+                    this.syncUIWithConfig(result.config);
+                    window.appUtils?.showAlert?.(`配置已保存，${result.warnings[0]}`, 'warning');
+                } else {
+                    window.appUtils?.showAlert?.('配置保存成功', 'success');
+                }
+
+                window.appState.currentConfig = result.config;
             } else {
-                throw new Error('保存失败');
+                throw new Error(result.message || '保存失败');
             }
         } catch (error) {
             console.error('自动保存配置失败:', error);
@@ -247,6 +324,264 @@ class ConfigManager {
         }
     }
 
+    // 新的：时间输入变化并保存的方法
+    onTimeInputChangeAndSave() {
+        const startTime = document.getElementById('startTime').value;
+        const endTime = document.getElementById('endTime').value;
+
+        // 先执行验证
+        const validation = this.validateTimeInput(startTime, endTime);
+
+        if (validation.isValid) {
+            // 验证通过才保存
+            this.autoSaveConfig();
+        } else {
+            // 验证失败，显示错误并恢复有效值
+            window.appUtils?.showAlert?.(validation.message, 'error');
+            this.restoreLastValidTime();
+        }
+    }
+
+    // 验证时间输入格式
+    validateTimeInput(startTime, endTime) {
+        if (!this.validateTimeFormat(startTime) || !this.validateTimeFormat(endTime)) {
+            return {
+                isValid: false,
+                message: '时间格式无效，请使用 HH:mm 格式（如：09:00）'
+            };
+        }
+
+        return { isValid: true, message: '' };
+    }
+
+    // 恢复到最后有效的值
+    restoreLastValidTime() {
+        const lastConfig = window.appState.currentConfig;
+        if (lastConfig && lastConfig.notification_hours) {
+            document.getElementById('startTime').value = lastConfig.notification_hours.start;
+            document.getElementById('endTime').value = lastConfig.notification_hours.end;
+        }
+    }
+
+    // 验证所有输入字段
+    validateAllInputs() {
+        const errors = [];
+        const values = {};
+        const restoreValues = {};
+
+        // 验证重复通知间隔
+        const repeatInterval = document.getElementById('repeatInterval').value;
+        const repeatIntervalNum = parseInt(repeatInterval);
+        if (isNaN(repeatIntervalNum) || repeatIntervalNum < 1 || repeatIntervalNum > 10080) {
+            errors.push('重复通知间隔必须是1-10080之间的整数');
+            restoreValues.repeatInterval = this.getLastValidValue('repeat_interval', 180);
+        } else {
+            values.repeatInterval = repeatIntervalNum;
+        }
+
+        // 验证每小时触发时机
+        const hourlyMinute = document.getElementById('hourlyMinute').value;
+        const hourlyMinuteNum = parseInt(hourlyMinute);
+        if (isNaN(hourlyMinuteNum) || hourlyMinuteNum < 0 || hourlyMinuteNum > 59) {
+            errors.push('每小时触发时机必须是0-59之间的整数');
+            restoreValues.hourlyMinute = this.getLastValidValue('hourly_minute', 5);
+        } else {
+            values.hourlyMinute = hourlyMinuteNum;
+        }
+
+        // 验证每天触发时间
+        const dailyTime = document.getElementById('dailyTime').value;
+        if (!this.validateTimeFormat(dailyTime)) {
+            errors.push('每天触发时间格式无效，请使用 HH:mm 格式（如：09:05）');
+            restoreValues.dailyTime = this.getLastValidValue('daily_time', '09:05');
+        } else {
+            values.dailyTime = dailyTime;
+        }
+
+        return {
+            isValid: errors.length === 0,
+            message: errors[0] || '',
+            values,
+            restoreValues
+        };
+    }
+
+    // 获取最后有效的值
+    getLastValidValue(field, defaultValue) {
+        const lastConfig = window.appState.currentConfig;
+        if (lastConfig) {
+            if (field === 'repeat_interval' && lastConfig.repeat_interval) {
+                return lastConfig.repeat_interval;
+            }
+            if (field === 'hourly_minute' && lastConfig.trigger_settings?.hourly_minute !== undefined) {
+                return lastConfig.trigger_settings.hourly_minute;
+            }
+            if (field === 'daily_time' && lastConfig.trigger_settings?.daily_time) {
+                return lastConfig.trigger_settings.daily_time;
+            }
+        }
+        return defaultValue;
+    }
+
+    // 恢复无效输入的值
+    restoreInvalidInputs(restoreValues) {
+        if (restoreValues.repeatInterval !== undefined) {
+            document.getElementById('repeatInterval').value = restoreValues.repeatInterval;
+        }
+        if (restoreValues.hourlyMinute !== undefined) {
+            document.getElementById('hourlyMinute').value = restoreValues.hourlyMinute;
+        }
+        if (restoreValues.dailyTime !== undefined) {
+            document.getElementById('dailyTime').value = restoreValues.dailyTime;
+        }
+    }
+
+    // 更新邮件组UI状态
+    updateGroupUIState(groupId, enabled, email) {
+        // 更新开关状态
+        const toggleSwitch = document.getElementById(`groupToggle_${groupId}`);
+        if (toggleSwitch) {
+            toggleSwitch.checked = enabled;
+        }
+
+        // 更新状态文本
+        const statusText = document.querySelector(`[data-group-id="${groupId}"] .group-status-text`);
+        if (statusText) {
+            statusText.textContent = enabled ? '已启用' : '已禁用';
+            statusText.style.color = enabled ? '#059669' : '#6b7280';
+        }
+
+        // 更新邮箱输入框
+        const emailInput = document.querySelector(`input[onchange*="updateGroupEmail('${groupId}'"]`);
+        if (emailInput) {
+            emailInput.value = email || '';
+        }
+    }
+
+    // 验证并保存配置（用于实时输入）
+    async validateAndSaveConfig() {
+        // 验证所有输入字段
+        const inputValidation = this.validateAllInputs();
+        if (!inputValidation.isValid) {
+            window.appUtils?.showAlert?.(inputValidation.message, 'error');
+            this.restoreInvalidInputs(inputValidation.restoreValues);
+            return;
+        }
+
+        // 验证通过，调用自动保存
+        await this.autoSaveConfig();
+    }
+
+    // 预验证时间配置
+    preValidateTimeConfig(timeControl, startTime, endTime) {
+        // 如果未启用时间限制
+        if (!timeControl.checked) {
+            return {
+                isValid: true,
+                data: { enabled: false, start: '09:00', end: '23:59' },
+                message: ''
+            };
+        }
+
+        // 验证时间格式
+        const startValid = this.validateTimeFormat(startTime);
+        const endValid = this.validateTimeFormat(endTime);
+
+        if (!startValid || !endValid) {
+            return {
+                isValid: false,
+                data: { enabled: false, start: '09:00', end: '23:59' },
+                correctedState: { checked: false, startTime: '09:00', endTime: '23:59' },
+                message: '时间格式无效，已自动禁用时间限制'
+            };
+        }
+
+        return {
+            isValid: true,
+            data: { enabled: true, start: startTime, end: endTime },
+            message: ''
+        };
+    }
+
+    // 同步UI状态
+    updateTimeUIState(state) {
+        if (state.checked !== undefined) {
+            document.getElementById('timeControl').checked = state.checked;
+            this.toggleTimeInputs();
+        }
+        if (state.startTime) {
+            document.getElementById('startTime').value = state.startTime;
+        }
+        if (state.endTime) {
+            document.getElementById('endTime').value = state.endTime;
+        }
+    }
+
+    // 同步UI与实际保存的配置
+    syncUIWithConfig(config) {
+        if (config.notification_hours) {
+            const { enabled, start, end } = config.notification_hours;
+
+            document.getElementById('timeControl').checked = enabled;
+            document.getElementById('startTime').value = start;
+            document.getElementById('endTime').value = end;
+            this.toggleTimeInputs();
+
+            // 清除可能的错误提示
+            const errorTip = document.getElementById('timeErrorTip');
+            if (errorTip) {
+                errorTip.remove();
+            }
+        }
+    }
+
+    // 验证并处理无效邮箱的邮件组
+    async validateAndHandleInvalidEmails(config) {
+        if (!config.email_groups || !Array.isArray(config.email_groups)) {
+            return;
+        }
+
+        const invalidGroups = [];
+        let configChanged = false;
+
+        // 检查每个邮件组
+        for (const group of config.email_groups) {
+            const email = group.email?.trim();
+            const isEnabled = group.enabled !== false;
+            const isEmailInvalid = !this.validateEmailFormat(email);
+
+            // 如果邮件组启用但邮箱无效，自动停用
+            if (isEnabled && isEmailInvalid) {
+                group.enabled = false;
+                invalidGroups.push({
+                    id: group.id,
+                    name: group.name || '未命名分组',
+                    email: email
+                });
+                configChanged = true;
+            }
+        }
+
+        // 如果有邮件组被自动停用，保存配置并通知用户
+        if (configChanged && invalidGroups.length > 0) {
+            try {
+                await this.saveConfig(config);
+                console.warn('自动停用无效邮箱的邮件组:', invalidGroups);
+
+                // 显示通知
+                setTimeout(() => {
+                    const groupNames = invalidGroups.map(g => g.name).join('、');
+                    window.appUtils?.showAlert?.(
+                        `⚠️ 发现 ${invalidGroups.length} 个邮件组的邮箱格式无效，已自动停用：${groupNames}。请检查并修正邮箱格式。`,
+                        'warning'
+                    );
+                }, 1000);
+            } catch (error) {
+                console.error('自动停用邮件组并保存配置失败:', error);
+            }
+        }
+    }
+
     // 检查监控状态是否可以开启（基于邮件组）
     canEnableMonitoring() {
         const config = window.appState.currentConfig || {};
@@ -259,8 +594,7 @@ class ConfigManager {
             // 检查邮箱是否有效
             const email = group.email?.trim();
             if (!email) return false;
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            if (!emailRegex.test(email)) return false;
+            if (!this.validateEmailFormat(email)) return false;
 
             // 检查是否有启用的币种
             return group.coins && group.coins.some(coin => coin.enabled !== false);
@@ -302,8 +636,7 @@ class ConfigManager {
                 return;
             }
 
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            if (!emailRegex.test(email)) {
+            if (!this.validateEmailFormat(email)) {
                 invalidEmailGroups.push(group.name || '未命名分组');
                 return;
             }
@@ -340,54 +673,72 @@ class ConfigManager {
         // 更新本地配置数据
         if (window.appState.currentConfig.email_groups) {
             const group = window.appState.currentConfig.email_groups.find(g => g.id === groupId);
-            if (group) {
-                // 如果尝试启用组，检查是否满足条件
-                if (isEnabled) {
-                    const email = group.email?.trim();
-                    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-                    if (!email) {
-                        window.appUtils?.showAlert?.('请先填写邮箱地址再启用此邮件组', 'error');
-                        // 重置开关状态
-                        document.getElementById(`groupToggle_${groupId}`).checked = false;
-                        return;
-                    }
-
-                    if (!emailRegex.test(email)) {
-                        window.appUtils?.showAlert?.('邮箱地址格式不正确，请修正后再启用此邮件组', 'error');
-                        // 重置开关状态
-                        document.getElementById(`groupToggle_${groupId}`).checked = false;
-                        return;
-                    }
-
-                    if (!group.coins || group.coins.length === 0) {
-                        window.appUtils?.showAlert?.('请先添加监控项目再启用此邮件组', 'error');
-                        // 重置开关状态
-                        document.getElementById(`groupToggle_${groupId}`).checked = false;
-                        return;
-                    }
-
-                    const hasEnabledCoins = group.coins.some(coin => coin.enabled !== false);
-                    if (!hasEnabledCoins) {
-                        window.appUtils?.showAlert?.('请先启用至少一个监控项目再启用此邮件组', 'error');
-                        // 重置开关状态
-                        document.getElementById(`groupToggle_${groupId}`).checked = false;
-                        return;
-                    }
-                }
-
-                group.enabled = isEnabled;
-
-                // 更新状态文本显示
-                const statusText = document.querySelector(`[data-group-id="${groupId}"] .group-status-text`);
-                if (statusText) {
-                    statusText.textContent = isEnabled ? '已启用' : '已禁用';
-                    statusText.style.color = isEnabled ? '#059669' : '#6b7280';
-                }
-
-                // 自动保存配置
-                this.autoSaveConfig();
+            if (!group) {
+                return;
             }
+
+            const previousState = group.enabled !== false;
+
+            // 检查状态是否真的发生了变化
+            if (previousState === isEnabled) {
+                console.log(`🔄 邮件组状态未发生变化，跳过更新: ${groupId}, 状态: ${isEnabled}`);
+                return;
+            }
+
+            console.log(`🔄 邮件组状态变化: ${groupId}, ${previousState} -> ${isEnabled}`);
+
+            // 如果尝试启用组，检查是否满足条件
+            if (isEnabled) {
+                const email = group.email?.trim();
+
+                if (!email) {
+                    window.appUtils?.showAlert?.('请先填写邮箱地址再启用此邮件组', 'error');
+                    // 重置开关状态
+                    this.updateGroupUIState(groupId, false, email);
+                    return;
+                }
+
+                if (!this.validateEmailFormat(email)) {
+                    window.appUtils?.showAlert?.('邮箱地址格式不正确，请修正后再启用此邮件组', 'error');
+                    // 重置开关状态
+                    this.updateGroupUIState(groupId, false, email);
+                    return;
+                }
+
+                if (!group.coins || group.coins.length === 0) {
+                    window.appUtils?.showAlert?.('请先添加监控项目再启用此邮件组', 'error');
+                    // 重置开关状态
+                    this.updateGroupUIState(groupId, false, email);
+                    return;
+                }
+
+                const hasEnabledCoins = group.coins.some(coin => coin.enabled !== false);
+                if (!hasEnabledCoins) {
+                    window.appUtils?.showAlert?.('请先启用至少一个监控项目再启用此邮件组', 'error');
+                    // 重置开关状态
+                    this.updateGroupUIState(groupId, false, email);
+                    return;
+                }
+
+                // 所有条件满足，启用邮件组
+                group.enabled = true;
+                console.log(`邮件组启用 - 组ID: ${groupId}, 邮箱: ${email}`);
+
+            } else {
+                // 用户主动禁用邮件组
+                group.enabled = false;
+                console.log(`邮件组禁用 - 组ID: ${groupId}`);
+            }
+
+            // 更新状态文本显示
+            const statusText = document.querySelector(`[data-group-id="${groupId}"] .group-status-text`);
+            if (statusText) {
+                statusText.textContent = isEnabled ? '已启用' : '已禁用';
+                statusText.style.color = isEnabled ? '#059669' : '#6b7280';
+            }
+
+            // 自动保存配置
+            this.autoSaveConfig();
         }
     }
 
@@ -425,7 +776,7 @@ class ConfigManager {
                     <input type="email"
                            value="${group.email || ''}"
                            onchange="window.appConfig.updateGroupEmail('${group.id}', this.value)"
-                           placeholder="输入邮箱地址">
+                           placeholder="输入邮箱地址（如：user@qq.com）">
                 </div>
 
                 <div class="group-coins">
@@ -443,12 +794,12 @@ class ConfigManager {
                                 <option value="okx">OKX</option>
                                 <option value="bybit">Bybit</option>
                             </select>
-                            <input type="text" id="newCoinSymbol_${group.id}" placeholder="币种">
+                            <input type="text" id="newCoinSymbol_${group.id}" placeholder="币种代码 (如: BTC, USDT)">
                             <select id="newCoinTimeframe_${group.id}">
                                 <option value="1h">1小时</option>
                                 <option value="24h">24小时</option>
                             </select>
-                            <input type="number" id="newCoinThreshold_${group.id}" placeholder="阈值%" step="0.1" min="0">
+                            <input type="number" id="newCoinThreshold_${group.id}" placeholder="利率阈值 (%)" step="0.1" min="0">
                             <button onclick="window.appConfig.addCoinToGroup('${group.id}')">添加</button>
                             <button onclick="window.appConfig.toggleAddCoinForm('${group.id}')" class="btn-secondary">取消</button>
                         </div>
@@ -459,12 +810,12 @@ class ConfigManager {
                                 <option value="okx">OKX</option>
                                 <option value="bybit">Bybit</option>
                             </select>
-                            <input type="text" id="newCoinSymbol_${group.id}" placeholder="币种">
+                            <input type="text" id="newCoinSymbol_${group.id}" placeholder="币种代码 (如: BTC, USDT)">
                             <select id="newCoinTimeframe_${group.id}">
                                 <option value="1h">1小时</option>
                                 <option value="24h">24小时</option>
                             </select>
-                            <input type="number" id="newCoinThreshold_${group.id}" placeholder="阈值%" step="0.1" min="0">
+                            <input type="number" id="newCoinThreshold_${group.id}" placeholder="利率阈值 (%)" step="0.1" min="0">
                             <button onclick="window.appConfig.addCoinToGroup('${group.id}')">添加</button>
                         </div>
                     `}
@@ -575,19 +926,133 @@ class ConfigManager {
         const groups = window.appState.currentConfig?.email_groups || [];
         const group = groups.find(g => g.id === groupId);
 
-        if (group) {
-            const previousEmail = group.email;
-            group.email = email;
+        if (!group) {
+            return;
+        }
 
+        const previousEmail = group.email;
+
+        // 检查邮箱是否真的发生了变化
+        if (previousEmail === email) {
+            console.log(`🔄 邮箱地址未发生变化，跳过更新: ${email}`);
+            return;
+        }
+
+        console.log(`📧 更新邮箱地址: ${previousEmail} -> ${email}`);
+        group.email = email;
+
+        // 检查是否需要自动停用邮件组
+        const wasEnabled = group.enabled !== false;
+        const isEmailInvalid = !this.validateEmailFormat(email);
+
+        // 如果邮箱无效且邮件组处于启用状态，自动停用
+        if (isEmailInvalid && wasEnabled) {
+            group.enabled = false;
+
+            // 保存配置（包含停用状态）
             try {
                 await this.saveConfig();
+
+                // 更新UI状态
+                this.updateGroupUIState(groupId, false, email);
+
+                // 显示详细的通知
+                window.appUtils?.showAlert?.(
+                    `⚠️ 邮箱格式无效，邮件组"${group.name || '未命名'}"已自动停用。请修正邮箱格式后重新启用。`,
+                    'warning'
+                );
+
+                // 记录停用原因到控制台
+                console.warn(`邮件组自动停用 - 组ID: ${groupId}, 邮箱: ${email}, 原因: 邮箱格式无效`);
+
             } catch (error) {
-                console.error('更新邮箱失败:', error);
-                // 回滚邮箱地址
+                console.error('自动停用邮件组失败:', error);
+                // 回滚状态
+                group.enabled = wasEnabled;
                 group.email = previousEmail;
-                window.appUtils?.showAlert?.('更新邮箱失败，请重试', 'error');
+                window.appUtils?.showAlert?.('邮箱格式无效，且自动停用失败，请检查配置', 'error');
             }
+            return;
         }
+
+        // 验证邮箱格式（仅提示，不停用）
+        if (isEmailInvalid) {
+            window.appUtils?.showAlert?.('邮箱格式无效，请输入有效的邮箱地址（如：user@example.com）', 'error');
+            // 恢复到之前的邮箱地址
+            setTimeout(() => {
+                const emailInput = document.querySelector(`input[onchange*="updateGroupEmail('${groupId}'"]`);
+                if (emailInput) {
+                    emailInput.value = previousEmail || '';
+                }
+            }, 0);
+            return;
+        }
+
+        // 邮箱有效，正常保存
+        try {
+            await this.saveConfig();
+        } catch (error) {
+            console.error('更新邮箱失败:', error);
+            // 回滚邮箱地址
+            group.email = previousEmail;
+            window.appUtils?.showAlert?.('更新邮箱失败，请重试', 'error');
+        }
+    }
+
+    // 实时邮箱输入验证已移除 - 使用全局统一提示方案
+    // validateEmailInput 方法不再需要，保持界面简洁
+
+    // 提供邮箱格式修复指导 - 简化版本，使用全局统一提示
+    showEmailFormatGuidance(invalidEmail) {
+        // 使用全局统一的提示方案，不在此处显示具体指导
+        // 详细错误信息通过 updateGroupEmail 方法中的全局提示提供
+        console.warn(`邮箱格式无效: ${invalidEmail}`);
+    }
+
+    // 验证邮箱格式
+    validateEmailFormat(email) {
+        if (!email || typeof email !== 'string') {
+            return false;
+        }
+
+        // 去除首尾空格
+        email = email.trim();
+
+        // 基础邮箱格式验证
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return false;
+        }
+
+        // 更严格的验证：检查域名是否有效
+        const [localPart, domain] = email.split('@');
+
+        // 本地部分验证
+        if (localPart.length < 1 || localPart.length > 64) {
+            return false;
+        }
+
+        // 域名部分验证
+        if (domain.length < 4 || domain.length > 253) {
+            return false;
+        }
+
+        // 域名必须包含点且点不能在开头或结尾
+        if (!domain.includes('.') || domain.startsWith('.') || domain.endsWith('.')) {
+            return false;
+        }
+
+        // 检查常见邮箱域名
+        const commonDomains = ['qq.com', 'gmail.com', '163.com', '126.com', 'outlook.com', 'hotmail.com', 'yahoo.com', 'sina.com', 'foxmail.com'];
+        const domainParts = domain.toLowerCase().split('.');
+
+        // 检查是否有有效的顶级域名
+        const tld = domainParts[domainParts.length - 1];
+        if (tld.length < 2) {
+            return false;
+        }
+
+        return true;
     }
 
     // 切换添加币种表单显示
@@ -640,8 +1105,19 @@ class ConfigManager {
             return;
         }
 
-        if (!threshold || threshold <= 0) {
-            window.appUtils?.showAlert?.('请输入有效的阈值');
+        // 验证币种格式（允许字母和数字，通常2-20个字符，支持常见币种代码）
+        if (!/^[A-Z0-9]{2,20}$/.test(symbol)) {
+            window.appUtils?.showAlert?.('币种格式无效，请使用2-20位大写字母或数字（如：BTC, USDT, ETH, SHIB）');
+            // 恢复到空值
+            document.getElementById(`newCoinSymbol_${groupId}`).value = '';
+            return;
+        }
+
+        // 验证利率阈值（百分比，通常0.1%-100%，但高收益币种可能更高）
+        if (!threshold || threshold <= 0 || threshold > 1000) {
+            window.appUtils?.showAlert?.('利率阈值必须是大于0%且不超过1000%的数字（如：5.0 表示5%）');
+            // 恢复到默认值
+            document.getElementById(`newCoinThreshold_${groupId}`).value = '5.0';
             return;
         }
 
@@ -729,7 +1205,7 @@ class ConfigManager {
                     </div>
                     <div class="form-group">
                         <label>币种:</label>
-                        <input type="text" id="editSymbol" value="${coin.symbol}" placeholder="币种符号">
+                        <input type="text" id="editSymbol" value="${coin.symbol}" placeholder="币种代码 (如: BTC, USDT)">
                     </div>
                     <div class="form-group">
                         <label>颗粒度:</label>
@@ -739,8 +1215,8 @@ class ConfigManager {
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>阈值(%):</label>
-                        <input type="number" id="editThreshold" value="${coin.threshold}" step="0.1" min="0" placeholder="阈值">
+                        <label>利率阈值(%):</label>
+                        <input type="number" id="editThreshold" value="${coin.threshold}" step="0.1" min="0" placeholder="利率阈值">
                     </div>
                 </div>
                 <div class="dialog-actions">
@@ -763,7 +1239,7 @@ class ConfigManager {
         }
 
         const exchange = document.getElementById('editExchange').value;
-        const symbol = document.getElementById('editSymbol').value.trim();
+        const symbol = document.getElementById('editSymbol').value.trim().toUpperCase();
         const timeframe = document.getElementById('editTimeframe').value;
         const threshold = parseFloat(document.getElementById('editThreshold').value);
 
@@ -773,8 +1249,14 @@ class ConfigManager {
             return;
         }
 
-        if (isNaN(threshold) || threshold < 0) {
-            window.appUtils?.showAlert?.('请输入有效的阈值', 'error');
+        // 验证币种格式（加密货币代码格式）
+        if (!/^[A-Z0-9]{2,20}$/.test(symbol)) {
+            window.appUtils?.showAlert?.('币种格式无效，请使用2-20位大写字母或数字（如：BTC, USDT, ETH, SHIB）', 'error');
+            return;
+        }
+
+        if (isNaN(threshold) || threshold <= 0 || threshold > 1000) {
+            window.appUtils?.showAlert?.('利率阈值必须是大于0%且不超过1000%的数字（如：5.0 表示5%）', 'error');
             return;
         }
 
