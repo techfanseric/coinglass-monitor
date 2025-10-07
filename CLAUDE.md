@@ -59,7 +59,7 @@ This is a CoinGlass interest rate monitoring system based on a local Express ser
 - **ES模块架构**：使用"type": "module"支持现代ES6模块语法
 - **Web管理界面**：提供直观的配置管理和状态监控界面
 - **智能配置系统**：自动检测Chrome路径和创建必要目录
-- **访问认证系统**：支持密码保护的访问控制，确保数据安全
+- **访问认证系统**：支持密码保护的访问控制和滑动续期功能，24小时有效期自动延长
 
 ### Frontend Architecture
 前端采用模块化架构，代码分离提升可维护性：

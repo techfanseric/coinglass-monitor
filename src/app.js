@@ -413,10 +413,31 @@ app.use((req, res, next) => {
   const sessionId = req.cookies?.sessionId;
 
   if (sessionId && sessions.has(sessionId)) {
-    // 检查会话是否过期（24小时）
     const session = sessions.get(sessionId);
+    const now = Date.now();
 
-    if (Date.now() - session.created < 24 * 60 * 60 * 1000) {
+    // 向后兼容：处理旧会话数据
+    if (!session.lastAccessed) {
+      session.lastAccessed = session.created;
+      session.lastCookieUpdate = session.created;
+    }
+
+    // 检查最后访问时间（24小时内有活动即有效）
+    if (now - session.lastAccessed < 24 * 60 * 60 * 1000) {
+      // 滑动续期：更新最后访问时间
+      session.lastAccessed = now;
+
+      // 定期延长Cookie有效期（每30分钟）
+      if (now - session.lastCookieUpdate > 30 * 60 * 1000) {
+        session.lastCookieUpdate = now;
+        res.setCookie('sessionId', sessionId, {
+          maxAge: 24 * 60 * 60,
+          httpOnly: true,
+          path: '/',
+          sameSite: 'Lax'
+        });
+      }
+
       return next();
     } else {
       // 会话过期，删除
@@ -528,8 +549,35 @@ app.get('/login', (req, res) => {
   const sessionId = req.cookies?.sessionId;
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId);
-    if (Date.now() - session.created < 24 * 60 * 60 * 1000) {
+    const now = Date.now();
+
+    // 向后兼容：处理旧会话数据
+    if (!session.lastAccessed) {
+      session.lastAccessed = session.created;
+      session.lastCookieUpdate = session.created;
+    }
+
+    // 检查最后访问时间（24小时内有活动即有效）
+    if (now - session.lastAccessed < 24 * 60 * 60 * 1000) {
+      // 滑动续期：更新最后访问时间
+      session.lastAccessed = now;
+
+      // 定期延长Cookie有效期（每30分钟）
+      if (now - session.lastCookieUpdate > 30 * 60 * 1000) {
+        session.lastCookieUpdate = now;
+        res.setCookie('sessionId', sessionId, {
+          maxAge: 24 * 60 * 60,
+          httpOnly: true,
+          path: '/',
+          sameSite: 'Lax'
+        });
+      }
+
       return res.redirect('/');
+    } else {
+      // 会话过期，删除
+      sessions.delete(sessionId);
+      res.clearCookie('sessionId');
     }
   }
 
@@ -555,7 +603,11 @@ app.post('/api/login', (req, res) => {
   if (password === accessPassword) {
     // 生成会话ID
     const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
-    sessions.set(sessionId, { created: Date.now() });
+    sessions.set(sessionId, {
+      created: Date.now(),
+      lastAccessed: Date.now(),
+      lastCookieUpdate: Date.now()
+    });
 
     console.log('🔐 登录成功，设置会话:', { sessionId, totalSessions: sessions.size });
 
