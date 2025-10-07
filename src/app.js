@@ -906,7 +906,6 @@ async function startZipAutoUpdate(gitRepoUrl) {
 // 检查ZIP更新
 async function checkZipUpdate(githubApiUrl) {
   try {
-    console.log('🔍 检查ZIP更新...');
 
     // 获取最新commit信息
     const response = await fetch(`${githubApiUrl}/commits/main`);
@@ -943,7 +942,7 @@ async function checkZipUpdate(githubApiUrl) {
       console.log(`📅 最新提交: ${latestCommit.substring(0, 7)} (${new Date(commitDate).toLocaleString('zh-CN')})`);
       await performZipUpdate(zipUrl, latestCommit, commitDate);
     } else {
-      console.log(`✅ 代码已是最新: ${latestCommit.substring(0, 7)} (${new Date(commitDate).toLocaleString('zh-CN')})`);
+      // 代码已是最新，静默处理不输出日志
     }
 
   } catch (error) {
