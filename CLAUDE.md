@@ -35,8 +35,12 @@ This is a CoinGlass interest rate monitoring system based on a local Express ser
   - `scrape.js` - 数据抓取API
 - **public/** - 前端静态文件（通过Express静态文件服务）：
   - `index.html` - 前端管理界面HTML结构
+  - `login.html` - 用户登录页面
   - `style.css` - 前端样式文件
   - `script.js` - 前端JavaScript逻辑
+  - `modules/` - 前端模块化组件：
+    - `config-manager.js` - 配置管理模块
+    - `system-utils.js` - 系统工具模块
 
 ### Key Components
 - **本地文件存储**：使用本地文件系统存储配置、状态和邮件历史数据
@@ -55,6 +59,7 @@ This is a CoinGlass interest rate monitoring system based on a local Express ser
 - **ES模块架构**：使用"type": "module"支持现代ES6模块语法
 - **Web管理界面**：提供直观的配置管理和状态监控界面
 - **智能配置系统**：自动检测Chrome路径和创建必要目录
+- **访问认证系统**：支持密码保护的访问控制，确保数据安全
 
 ### Frontend Architecture
 前端采用模块化架构，代码分离提升可维护性：
@@ -158,6 +163,7 @@ http://localhost:{端口}/api/scrape   # Scraping API
 - 日志管理配置（保留天数、自动清理等）
 - 前端配置（更新间隔、API超时等）
 - 监控服务配置（重试次数、冷却时间等）
+- **访问认证配置**：密码保护访问控制
 - **自动更新配置**：支持Git仓库和ZIP包两种自动更新方式
 
 ### Port Configuration
@@ -274,7 +280,10 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 - **灵活配置**：支持仅每小时、仅每24小时或同时启用
 
 ## API接口
-- `GET /` - 主页面（前端界面）
+- `GET /` - 主页面（前端界面，需要认证）
+- `GET /login` - 登录页面
+- `POST /api/login` - 用户登录验证
+- `POST /api/logout` - 用户登出
 - `GET /api/config` - 获取用户配置
 - `POST /api/config` - 保存用户配置
 - `GET /api/status` - 获取当前监控状态
