@@ -3,6 +3,132 @@
  * 负责配置的加载、保存、验证和邮件分组管理
  */
 
+// 邮箱建议管理类
+class EmailSuggestionManager {
+    constructor() {
+        this.currentInput = null;
+        this.currentSuggestions = [];
+        this.inputTimeout = null;
+        this.setupEventListeners();
+    }
+
+    setupEventListeners() {
+        // 使用事件委托处理动态创建的输入框
+        document.addEventListener('focus', (e) => {
+            if (e.target.matches('input[type="email"]')) {
+                this.handleEmailFocus(e.target);
+            }
+        }, true);
+
+        document.addEventListener('input', (e) => {
+            if (e.target.matches('input[type="email"]')) {
+                this.handleEmailInput(e.target);
+            }
+        });
+
+        document.addEventListener('blur', (e) => {
+            if (e.target.matches('input[type="email"]')) {
+                this.handleEmailBlur(e.target);
+            }
+        }, true);
+    }
+
+    handleEmailFocus(input) {
+        this.currentInput = input;
+        this.showSuggestions(input);
+    }
+
+    handleEmailInput(input) {
+        // 延迟显示建议，避免频繁更新
+        clearTimeout(this.inputTimeout);
+        this.inputTimeout = setTimeout(() => {
+            this.showSuggestions(input);
+        }, 300);
+    }
+
+    handleEmailBlur(input) {
+        // 延迟隐藏，允许点击建议项
+        setTimeout(() => {
+            this.hideSuggestions();
+        }, 200);
+    }
+
+    collectExistingEmails() {
+        const existingEmails = new Set();
+        document.querySelectorAll('input[type="email"]').forEach(input => {
+            if (input.value && this.isValidEmail(input.value)) {
+                existingEmails.add(input.value.toLowerCase());
+            }
+        });
+        return Array.from(existingEmails);
+    }
+
+    showSuggestions(input) {
+        const existingEmails = this.collectExistingEmails();
+        const inputLower = input.value.toLowerCase().trim();
+
+        // 排序逻辑：匹配项在前，非匹配项在后，都按字母排序
+        const suggestions = existingEmails.sort((a, b) => {
+            const aMatches = a.includes(inputLower);
+            const bMatches = b.includes(inputLower);
+
+            if (aMatches && !bMatches) return -1;  // a匹配，b不匹配 → a在前
+            if (!aMatches && bMatches) return 1;   // a不匹配，b匹配 → b在前
+            return a.localeCompare(b);             // 都匹配或都不匹配 → 字母排序
+        });
+
+        // 过滤掉当前输入框已有的邮箱
+        const filteredSuggestions = suggestions.filter(email =>
+            email !== inputLower
+        );
+
+        if (filteredSuggestions.length > 0) {
+            this.renderSuggestions(input, filteredSuggestions);
+        } else {
+            this.hideSuggestions();
+        }
+    }
+
+    renderSuggestions(input, suggestions) {
+        // 移除现有建议框
+        this.hideSuggestions();
+
+        // 创建建议框
+        const suggestionBox = document.createElement('div');
+        suggestionBox.className = 'email-suggestions';
+
+        suggestions.forEach(email => {
+            const item = document.createElement('div');
+            item.className = 'email-suggestion-item';
+            item.textContent = email;
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                input.value = email;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                this.hideSuggestions();
+            });
+            suggestionBox.appendChild(item);
+        });
+
+        // 添加到DOM
+        input.parentElement.appendChild(suggestionBox);
+        this.currentSuggestions = suggestions;
+    }
+
+    hideSuggestions() {
+        const existing = document.querySelector('.email-suggestions');
+        if (existing) {
+            existing.remove();
+        }
+        this.currentSuggestions = [];
+    }
+
+    isValidEmail(email) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        return emailRegex.test(email);
+    }
+}
+
 // 导出配置管理类
 class ConfigManager {
     constructor() {
@@ -943,7 +1069,7 @@ class ConfigManager {
     }
 
     // 更新分组邮箱
-    async updateGroupEmail(groupId, email) {
+    async updateGroupEmail(groupId, newEmail) {
         const groups = window.appState.currentConfig?.email_groups || [];
         const group = groups.find(g => g.id === groupId);
 
@@ -951,72 +1077,50 @@ class ConfigManager {
             return;
         }
 
-        const previousEmail = group.email;
+        const oldEmail = group.email;
+        const trimmedEmail = newEmail.trim();
 
         // 检查邮箱是否真的发生了变化
-        if (previousEmail === email) {
-            console.log(`🔄 邮箱地址未发生变化，跳过更新: ${email}`);
+        if (oldEmail === trimmedEmail) {
+            console.log(`🔄 邮箱地址未发生变化，跳过更新: ${trimmedEmail}`);
             return;
         }
 
-        console.log(`📧 更新邮箱地址: ${previousEmail} -> ${email}`);
-        group.email = email;
+        console.log(`📧 更新邮箱地址: ${oldEmail} -> ${trimmedEmail}`);
+        group.email = trimmedEmail;
 
-        // 检查是否需要自动停用邮件组
-        const wasEnabled = group.enabled !== false;
-        const isEmailInvalid = !this.validateEmailFormat(email);
+        // 邮箱验证 - 仅标记状态，不修改内容
+        const emailValid = this.validateEmailFormat(trimmedEmail);
+        const hasValidCoins = group.coins && group.coins.length > 0;
 
-        // 如果邮箱无效且邮件组处于启用状态，自动停用
-        if (isEmailInvalid && wasEnabled) {
-            group.enabled = false;
+        // 更新启用状态
+        group.enabled = emailValid && hasValidCoins;
 
-            // 保存配置（包含停用状态）
-            try {
-                await this.saveConfig();
-
-                // 更新UI状态
-                this.updateGroupUIState(groupId, false, email);
-
-                // 显示详细的通知
-                window.appUtils?.showAlert?.(
-                    `⚠️ 邮箱格式无效，邮件组"${group.name || '未命名'}"已自动停用。请修正邮箱格式后重新启用。`,
-                    'warning'
-                );
-
-                // 记录停用原因到控制台
-                console.warn(`邮件组自动停用 - 组ID: ${groupId}, 邮箱: ${email}, 原因: 邮箱格式无效`);
-
-            } catch (error) {
-                console.error('自动停用邮件组失败:', error);
-                // 回滚状态
-                group.enabled = wasEnabled;
-                group.email = previousEmail;
-                window.appUtils?.showAlert?.('邮箱格式无效，且自动停用失败，请检查配置', 'error');
+        // 添加/移除错误样式
+        const inputElement = document.querySelector(`input[onchange*="updateGroupEmail('${groupId}'"]`);
+        if (inputElement) {
+            if (trimmedEmail && !emailValid) {
+                inputElement.classList.add('email-input-error');
+            } else {
+                inputElement.classList.remove('email-input-error');
             }
-            return;
         }
 
-        // 验证邮箱格式（仅提示，不停用）
-        if (isEmailInvalid) {
-            window.appUtils?.showAlert?.('邮箱格式无效，请输入有效的邮箱地址（如：user@example.com）', 'error');
-            // 恢复到之前的邮箱地址
-            setTimeout(() => {
-                const emailInput = document.querySelector(`input[onchange*="updateGroupEmail('${groupId}'"]`);
-                if (emailInput) {
-                    emailInput.value = previousEmail || '';
-                }
-            }, 0);
-            return;
-        }
-
-        // 邮箱有效，正常保存
         try {
             await this.saveConfig();
+            this.renderEmailGroups();
+
+            // 保留原有提示，但不清空输入
+            if (trimmedEmail && !emailValid) {
+                window.appUtils?.showAlert?.('邮箱格式不正确，分组已禁用', 'error');
+            } else if (oldEmail !== trimmedEmail) {
+                window.appUtils?.showAlert?.('邮箱地址已更新', 'success');
+            }
         } catch (error) {
-            console.error('更新邮箱失败:', error);
             // 回滚邮箱地址
-            group.email = previousEmail;
-            window.appUtils?.showAlert?.('更新邮箱失败，请重试', 'error');
+            group.email = oldEmail;
+            window.appUtils?.showAlert?.('更新失败', 'error');
+            throw error;
         }
     }
 
@@ -1350,3 +1454,6 @@ class ConfigManager {
 
 // 创建全局实例并导出
 window.appConfig = new ConfigManager();
+
+// 初始化邮箱建议管理器
+window.emailSuggestionManager = new EmailSuggestionManager();

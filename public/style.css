@@ -1119,3 +1119,45 @@ input:checked + .slider:before {
     padding: 8px 12px;
     font-size: 13px;
 }
+
+/* 邮箱建议框样式 */
+.email-suggestions {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.email-suggestion-item {
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    border-bottom: 1px solid #f5f5f5;
+    font-size: 0.875em;
+}
+
+.email-suggestion-item:hover {
+    background-color: #f8f9fa;
+}
+
+.email-suggestion-item:last-child {
+    border-bottom: none;
+}
+
+/* 邮箱输入框错误状态 */
+.email-input-error {
+    border-color: #dc3545 !important;
+    box-shadow: 0 0 0 2px rgba(220, 53, 69, 0.25) !important;
+}
+
+/* 邮箱输入框容器相对定位 */
+.group-email {
+    position: relative;
+}
