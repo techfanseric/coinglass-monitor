@@ -72,16 +72,136 @@ async function runGroupedMonitoring(config) {
     return { success: false, reason: 'no_enabled_groups' };
   }
 
+  // 先进行冷却期预检查，收集所有需要抓取的币种（去重）
+  const allCoinsToScrape = [];
+  const coinMap = new Map(); // 用于去重，key为 "symbol_exchange_timeframe"
+  const totalSkippedCoins = [];
+
+  console.log(`🔄 开始对所有分组进行冷却期检查...`);
+
+  for (const group of enabledGroups) {
+    console.log(`🔄 处理启用的分组: ${group.name} (${group.email})`);
+
+    // 获取分组状态
+    const state = await storageService.getGroupState(group.id) || {
+      status: 'normal',
+      coin_states: {}
+    };
+
+    const enabledCoins = group.coins.filter(c => c.enabled);
+    let groupSkippedCount = 0;
+
+    console.log(`🔄 冷却期检查: ${enabledCoins.length} 个币种...`);
+
+    for (const coin of enabledCoins) {
+      const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+      const coinState = state.coin_states && state.coin_states[coinStateKey];
+
+      if (coinState && coinState.status === 'alert') {
+        const nextNotificationTime = new Date(coinState.next_notification);
+        const now = new Date();
+
+        if (now < nextNotificationTime) {
+          // 仍在冷却期内，跳过抓取
+          const remainingTime = Math.ceil((nextNotificationTime - now) / (1000 * 60)); // 分钟
+          console.log(`  - ${coin.symbol}: 跳过抓取，仍在冷却期内，距离下次通知还有 ${remainingTime} 分钟（下次通知时间：${formatDateTimeCN(nextNotificationTime)}）`);
+          totalSkippedCoins.push({
+            coin,
+            group: group.name,
+            remainingTime,
+            nextNotificationTime: formatDateTimeCN(nextNotificationTime)
+          });
+          groupSkippedCount++;
+          continue;
+        }
+        // 冷却期结束，需要检查
+      }
+
+      // 需要抓取检查的币种（首次检查或冷却期结束）
+      const coinKey = `${coin.symbol}_${coin.exchange || 'binance'}_${coin.timeframe || '1h'}`;
+      if (!coinMap.has(coinKey)) {
+        coinMap.set(coinKey, {
+          ...coin,
+          originalGroup: group.name,
+          originalEmail: group.email
+        });
+        allCoinsToScrape.push(coinMap.get(coinKey));
+      }
+    }
+
+    console.log(`🎯 ${group.name}: 准备抓取 ${enabledCoins.length - groupSkippedCount} 个币种（跳过 ${groupSkippedCount} 个冷却期币种）`);
+  }
+
+  console.log(`🎯 总共收集到 ${allCoinsToScrape.length} 个唯一币种需要抓取（跳过 ${totalSkippedCoins.length} 个冷却期币种）`);
+
+  // 显示即将抓取的币种详情
+  if (allCoinsToScrape.length > 0) {
+    console.log(`📋 准备抓取的币种详情:`);
+    allCoinsToScrape.forEach(coin => {
+      console.log(`  - ${coin.symbol}: 交易所=${coin.exchange}, 颗粒度=${coin.timeframe}, 阈值=${coin.threshold}% (来自分组: ${coin.originalGroup})`);
+    });
+  }
+
+  // 如果所有币种都在冷却期内，直接返回
+  if (allCoinsToScrape.length === 0) {
+    console.log(`✅ 冷却期检查完成：所有币种都在冷却期内，无需抓取数据`);
+
+    // 构建跳过的币种结果
+    const skippedResults = [];
+    for (const group of enabledGroups) {
+      const groupSkippedCoins = totalSkippedCoins.filter(item => item.group === group.name);
+      skippedResults.push({
+        groupId: group.id,
+        groupName: group.name,
+        email: group.email,
+        triggeredCount: 0,
+        recoveredCount: 0,
+        enabledCoinsCount: group.coins.filter(c => c.enabled).length,
+        skippedCoinsCount: groupSkippedCoins.length,
+        skippedCoins: groupSkippedCoins.map(item => ({
+          symbol: item.coin.symbol,
+          exchange: item.coin.exchange,
+          timeframe: item.coin.timeframe,
+          threshold: item.coin.threshold,
+          remainingTime: item.remainingTime,
+          nextNotificationTime: item.nextNotificationTime
+        })),
+        emailSent: false,
+        success: true,
+        skipped: true
+      });
+    }
+
+    return {
+      success: true,
+      type: 'grouped',
+      results: skippedResults,
+      totalGroups: enabledGroups.length,
+      totalTriggered: 0,
+      totalSkipped: totalSkippedCoins.length
+    };
+  }
+
+  // 使用全局浏览器会话一次性抓取所有币种
+  const allScrapedData = await scrapeAllCoinsOnce(allCoinsToScrape, logPrefix);
+
+  // 按分组处理通知（只处理通知逻辑，不再抓取）
   for (const group of enabledGroups) {
     try {
-      console.log(`🔄 处理启用的分组: ${group.name} (${group.email})`);
-      const result = await processGroupMonitoring(group, config);
+      console.log(`🔄 处理分组通知: ${group.name} (${group.email})`);
+
+      // 获取该组跳过的币种信息
+      const groupSkippedCoins = totalSkippedCoins.filter(item => item.group === group.name);
+
+      const result = await processGroupNotificationsOnly(group, config, allScrapedData, groupSkippedCoins);
       groupResults.push(result);
 
-      // 组间延迟，避免请求过于频繁
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // 组间延迟，避免邮件发送过于频繁
+      if (enabledGroups.indexOf(group) < enabledGroups.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
     } catch (error) {
-      console.error(`❌ 处理分组 ${group.name} 失败:`, error);
+      console.error(`❌ 处理分组 ${group.name} 通知失败:`, error);
       groupResults.push({
         groupId: group.id,
         groupName: group.name,
@@ -95,16 +215,18 @@ async function runGroupedMonitoring(config) {
   await checkPendingNotifications(config);
 
   const totalTriggered = groupResults.reduce((sum, result) => sum + (result.triggeredCount || 0), 0);
+  const totalSkipped = groupResults.reduce((sum, result) => sum + (result.skippedCoinsCount || 0), 0);
 
-  loggerService.info(`${logPrefix} 分组监控完成，总触发 ${totalTriggered} 个币种`);
-  console.log(`✅ 分组监控完成，总触发 ${totalTriggered} 个币种`);
+  loggerService.info(`${logPrefix} 分组监控完成，总触发 ${totalTriggered} 个币种，跳过 ${totalSkipped} 个冷却期币种`);
+  console.log(`✅ 分组监控完成，总触发 ${totalTriggered} 个币种，跳过 ${totalSkipped} 个冷却期币种`);
 
   return {
     success: true,
     type: 'grouped',
     results: groupResults,
     totalGroups: config.email_groups.length,
-    totalTriggered
+    totalTriggered,
+    totalSkipped
   };
 }
 
@@ -141,7 +263,7 @@ async function processGroupMonitoring(group, globalConfig) {
     const coinsToScrape = [];
     const skippedCoins = [];
 
-    console.log(`🔄 ${group.name}: 冷却期预检查 ${enabledCoins.length} 个币种...`);
+    console.log(`🔄 冷却期检查: ${enabledCoins.length} 个币种...`);
 
     for (const coin of enabledCoins) {
       const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
@@ -164,7 +286,7 @@ async function processGroupMonitoring(group, globalConfig) {
     }
 
     if (coinsToScrape.length === 0) {
-      console.log(`✅ ${group.name}: 所有币种都在冷却期内，无需抓取数据`);
+      console.log(`✅ 冷却期检查: 所有币种都在冷却期内`);
       return {
         groupId: group.id,
         groupName: group.name,
@@ -194,48 +316,140 @@ async function processGroupMonitoring(group, globalConfig) {
       console.log(`  - ${coin.symbol}: 交易所=${coin.exchange}, 颗粒度=${coin.timeframe}, 阈值=${coin.threshold}%`);
     });
 
-    // 按币种独立抓取数据
+    // 使用共享浏览器会话批量抓取数据
+    console.log(`🌐 创建共享浏览器会话用于分组监控...`);
     const allCoinsData = {};
     const coinResults = [];
+    let sharedBrowser = null;
+    let sharedPage = null;
 
-    for (const coin of coinsToScrape) {
-      try {
-        console.log(`🔄 开始抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
+    try {
+      // 初始化共享浏览器会话
+      sharedBrowser = await scraperService.initBrowser();
+      sharedPage = await sharedBrowser.newPage();
+      await sharedPage.setViewport({
+        width: scraperService.config.windowWidth,
+        height: scraperService.config.windowHeight
+      });
 
-        const coinRateData = await scraperService.scrapeCoinGlassData(
-          coin.exchange || 'binance',
-          coin.symbol,
-          coin.timeframe || '1h',
-          [coin.symbol]
-        );
+      console.log('📖 访问 CoinGlass 页面...');
+      await sharedPage.goto(scraperService.config.coinglassBaseUrl, {
+        waitUntil: 'networkidle2',
+        timeout: scraperService.config.pageTimeout
+      });
 
-        if (coinRateData && coinRateData.coins && coinRateData.coins[coin.symbol]) {
+      console.log('⏳ 等待页面完全加载...');
+      await sharedPage.waitForTimeout(scraperService.config.waitTimes.initial);
+
+      // 使用共享浏览器会话批量抓取所有币种
+      for (const coin of coinsToScrape) {
+        try {
+          console.log(`🔄 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
+
+          // 使用共享浏览器会话进行抓取
+          const coinRateData = await scraperService.scrapeCoinGlassDataWithSession(
+            coin.exchange || 'binance',
+            coin.symbol,
+            coin.timeframe || '1h',
+            [coin.symbol],
+            sharedBrowser,
+            sharedPage
+          );
+
           const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
-          allCoinsData[coinKey] = coinRateData.coins[coin.symbol];
 
-          console.log(`✅ ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据抓取成功，利率: ${coinRateData.coins[coin.symbol].annual_rate}%`);
-        } else {
-          console.warn(`⚠️ ${coin.symbol} 数据抓取失败，跳过阈值检查`);
+          if (coinRateData && coinRateData.coins && coinRateData.coins[coinKey]) {
+            allCoinsData[coinKey] = coinRateData.coins[coinKey];
+
+            console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${coinRateData.coins[coinKey].annual_rate}%`);
+
+            coinResults.push({
+              coin: coin.symbol,
+              exchange: coin.exchange,
+              timeframe: coin.timeframe,
+              success: true,
+              currentRate: coinRateData.coins[coinKey].annual_rate,
+              reason: 'scraping_success'
+            });
+          } else {
+            console.warn(`⚠️ ${coin.symbol} 数据抓取失败，跳过阈值检查`);
+            coinResults.push({
+              coin: coin.symbol,
+              exchange: coin.exchange,
+              timeframe: coin.timeframe,
+              success: false,
+              reason: 'scraping_failed',
+              currentRate: null
+            });
+          }
+
+          // 币种间添加短暂延迟
+          await new Promise(resolve => setTimeout(resolve, 2000));
+
+        } catch (error) {
+          console.error(`❌ ${coin.symbol} 抓取过程中发生错误:`, error.message);
           coinResults.push({
             coin: coin.symbol,
+            exchange: coin.exchange,
+            timeframe: coin.timeframe,
             success: false,
-            reason: 'scraping_failed',
+            reason: 'scraping_error',
+            error: error.message,
             currentRate: null
           });
         }
+      }
 
-        // 币种间添加短暂延迟
-        await new Promise(resolve => setTimeout(resolve, 2000));
+      // 清理共享浏览器会话
+      try {
+        if (sharedBrowser) {
+          await sharedBrowser.close();
+          console.log('🌐 分组监控浏览器会话已关闭');
+        }
+      } catch (cleanupError) {
+        console.warn('⚠️ 浏览器会话清理警告:', cleanupError.message);
+      }
 
-      } catch (error) {
-        console.error(`❌ ${coin.symbol} 抓取过程中发生错误:`, error.message);
+    } catch (sessionError) {
+      console.error('❌ 浏览器会话创建失败:', sessionError);
+
+      // 清理部分创建的资源
+      try {
+        if (sharedBrowser) {
+          await sharedBrowser.close();
+        }
+      } catch (cleanupError) {
+        console.warn('⚠️ 异常清理警告:', cleanupError.message);
+      }
+
+      // 如果会话创建失败，将所有币种标记为失败
+      for (const coin of coinsToScrape) {
         coinResults.push({
           coin: coin.symbol,
+          exchange: coin.exchange,
+          timeframe: coin.timeframe,
           success: false,
-          reason: 'scraping_error',
-          error: error.message
+          reason: 'session_creation_failed',
+          error: sessionError.message,
+          currentRate: null
         });
       }
+
+      return {
+        groupId: group.id,
+        groupName: group.name,
+        email: group.email,
+        triggeredCount: 0,
+        recoveredCount: 0,
+        enabledCoinsCount: enabledCoins.length,
+        skippedCoinsCount: skippedCoins.length,
+        skippedCoins,
+        emailSent: false,
+        coinResults,
+        success: false,
+        error: 'browser_session_failed',
+        errorMessage: sessionError.message
+      };
     }
 
     // 检查该组所有币种的阈值
@@ -261,6 +475,7 @@ async function processGroupMonitoring(group, globalConfig) {
           triggeredCoins.push({
             ...coin,
             current_rate: currentRate,
+            currentRate, // 保留兼容性
             excess: ((currentRate - coin.threshold) / coin.threshold * 100).toFixed(1),
             exchange: coin.exchange,
             timeframe: coin.timeframe
@@ -373,7 +588,6 @@ async function checkGroupCoinThreshold(group, coin, currentRate, allCoinsData, g
   }
 
   if (!coinData) {
-    loggerService.warn(`[阈值检查] 分组${group.name} 币种 ${coin.symbol} 数据不存在`);
     console.log(`❌ 分组${group.name} 币种 ${coin.symbol} 数据不存在`);
     return {
       coin: coin.symbol,
@@ -383,7 +597,7 @@ async function checkGroupCoinThreshold(group, coin, currentRate, allCoinsData, g
     };
   }
 
-  console.log(`✅ 找到币种数据: ${coin.symbol} (${coin.exchange}/${coin.timeframe}) -> 利率 ${currentRate}%`);
+  // 币种数据已在调用方处理，这里不再重复输出
 
   // 获取分组状态（而不是币种状态）
   const state = await storageService.getGroupState(group.id);
@@ -421,8 +635,7 @@ async function checkGroupCoinThreshold(group, coin, currentRate, allCoinsData, g
           await storageService.updateGroupState(group.id, 'alert', state);
 
           result.actions.push('alert_marked');
-          loggerService.info(`[阈值检查] 分组${group.name} 币种 ${coin.symbol} 触发警报，标记为待发送，利率 ${currentRate}% > ${coin.threshold}%`);
-          console.log(`分组${group.name} 币种 ${coin.symbol} 触发警报，标记为待发送分组邮件`);
+          console.log(`🚨 分组${group.name} 币种 ${coin.symbol} 触发警报，标记为待发送，利率 ${currentRate}% > ${coin.threshold}%`);
         } else {
           // 非时间段内，延迟到下一个允许时间段
           const nextNotificationTime = getNextNotificationTime(globalConfig);
@@ -558,7 +771,7 @@ async function runLegacyMonitoring(config) {
   loggerService.info(`${logPrefix} 触发条件满足，开始按币种独立抓取 CoinGlass 数据`);
   console.log('3. 触发条件满足，开始按币种独立抓取 CoinGlass 数据...');
 
-  // 3. 按币种独立抓取数据（修复：使用每个币种的独立配置）
+  // 3. 使用共享浏览器会话批量抓取数据
   const enabledCoins = config.coins.filter(c => c.enabled);
   const allCoinsData = {};
   const results = [];
@@ -569,26 +782,51 @@ async function runLegacyMonitoring(config) {
     console.log(`  - ${coin.symbol}: 交易所=${coin.exchange}, 颗粒度=${coin.timeframe}`);
   });
 
-    // 为每个启用的币种独立抓取数据
+  // 创建共享浏览器会话用于传统监控
+  console.log(`🌐 创建共享浏览器会话用于传统监控...`);
+  let sharedBrowser = null;
+  let sharedPage = null;
+
+  try {
+    // 初始化共享浏览器会话
+    sharedBrowser = await scraperService.initBrowser();
+    sharedPage = await sharedBrowser.newPage();
+    await sharedPage.setViewport({
+      width: scraperService.config.windowWidth,
+      height: scraperService.config.windowHeight
+    });
+
+    console.log('📖 访问 CoinGlass 页面...');
+    await sharedPage.goto(scraperService.config.coinglassBaseUrl, {
+      waitUntil: 'networkidle2',
+      timeout: scraperService.config.pageTimeout
+    });
+
+    console.log('⏳ 等待页面完全加载...');
+    await sharedPage.waitForTimeout(scraperService.config.waitTimes.initial);
+
+    // 使用共享浏览器会话批量抓取所有币种
     for (const coin of enabledCoins) {
       try {
-        console.log(`🔄 开始抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
+        console.log(`🔄 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
 
-        const coinRateData = await scraperService.scrapeCoinGlassData(
+        const coinRateData = await scraperService.scrapeCoinGlassDataWithSession(
           coin.exchange || 'binance',  // 使用币种独立配置
           coin.symbol,                  // 使用币种符号
           coin.timeframe || '1h',       // 使用币种独立配置
-          [coin.symbol]                 // 只抓取当前币种
+          [coin.symbol],                // 只抓取当前币种
+          sharedBrowser,                // 复用浏览器实例
+          sharedPage                    // 复用页面实例
         );
 
-        if (coinRateData && coinRateData.coins && coinRateData.coins[coin.symbol]) {
-          // 使用复合键避免重复币种覆盖
-          const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
-          allCoinsData[coinKey] = coinRateData.coins[coin.symbol];
+        // 使用复合键避免重复币种覆盖
+        const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+        if (coinRateData && coinRateData.coins && coinRateData.coins[coinKey]) {
+          allCoinsData[coinKey] = coinRateData.coins[coinKey];
 
           // 为重复币种创建唯一标识的数据副本
           const coinDataWithMeta = {
-            ...coinRateData.coins[coin.symbol],
+            ...coinRateData.coins[coinKey],
             exchange: coin.exchange,
             timeframe: coin.timeframe,
             coin_key: coinKey,
@@ -598,7 +836,7 @@ async function runLegacyMonitoring(config) {
           // 复合键存储已经完成，不再创建币种符号副本
           // 这确保数据的唯一性和正确性，避免复合键被简单键覆盖
 
-          console.log(`✅ ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据抓取成功，利率: ${coinRateData.coins[coin.symbol].annual_rate}%`);
+          console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${coinRateData.coins[coinKey].annual_rate}%`);
 
           // 注意：阈值检查将在所有币种抓取完成后统一进行（第147-157行）
         } else {
@@ -624,6 +862,51 @@ async function runLegacyMonitoring(config) {
         });
       }
     }
+
+    // 清理共享浏览器会话
+    try {
+      if (sharedBrowser) {
+        await sharedBrowser.close();
+        console.log('🌐 传统监控浏览器会话已关闭');
+      }
+    } catch (cleanupError) {
+      console.warn('⚠️ 浏览器会话清理警告:', cleanupError.message);
+    }
+
+  } catch (sessionError) {
+    console.error('❌ 传统监控浏览器会话创建失败:', sessionError);
+
+    // 清理部分创建的资源
+    try {
+      if (sharedBrowser) {
+        await sharedBrowser.close();
+      }
+    } catch (cleanupError) {
+      console.warn('⚠️ 异常清理警告:', cleanupError.message);
+    }
+
+    // 如果会话创建失败，将所有币种标记为失败
+    for (const coin of enabledCoins) {
+      results.push({
+        coin: coin.symbol,
+        exchange: coin.exchange,
+        timeframe: coin.timeframe,
+        success: false,
+        reason: 'session_creation_failed',
+        error: sessionError.message,
+        currentRate: null
+      });
+    }
+
+    loggerService.error(`${logPrefix} 浏览器会话创建失败: ${sessionError.message}`);
+    return {
+      success: false,
+      error: 'browser_session_failed',
+      errorMessage: sessionError.message,
+      results: results,
+      timestamp: formatDateTime(new Date())
+    };
+  }
 
     // 构建统一的返回数据结构
     const combinedRateData = {
@@ -709,13 +992,12 @@ export async function checkCoinThreshold(coin, rateData, config) {
 
   const currentRate = coinData?.annual_rate;
   if (!currentRate) {
-    loggerService.warn(`[阈值检查] 币种 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据不存在`);
     console.log(`❌ 币种 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据不存在`);
     console.log(`🔍 可用的数据键: ${Object.keys(rateData.coins).join(', ')}`);
     return { coin: coin.symbol, success: false, reason: 'data_not_found' };
   }
 
-  console.log(`✅ 找到币种数据: ${coin.symbol} (${coin.exchange}/${coin.timeframe}) -> 利率 ${currentRate}%`);
+  // 币种数据已在调用方处理，这里不再重复输出
 
   // 获取币种状态
   const state = await storageService.getCoinState(coin.symbol);
@@ -744,11 +1026,10 @@ export async function checkCoinThreshold(coin, rateData, config) {
               last_rate: currentRate
             });
             result.actions.push('alert_sent');
-            loggerService.info(`[阈值检查] 币种 ${coin.symbol} 触发警报，邮件已发送，利率 ${currentRate}% > ${coin.threshold}%`);
-            console.log(`币种 ${coin.symbol} 触发警报，邮件已发送`);
+            console.log(`✅ 币种 ${coin.symbol} 触发警报，邮件已发送，利率 ${currentRate}% > ${coin.threshold}%`);
           } else {
             result.actions.push('alert_failed');
-            loggerService.error(`[阈值检查] 币种 ${coin.symbol} 警报邮件发送失败`);
+            console.error(`❌ 币种 ${coin.symbol} 警报邮件发送失败`);
           }
         } else {
           // 非时间段内，延迟到下一个允许时间段
@@ -1257,6 +1538,276 @@ export async function getAllCoinsStatus() {
   } catch (error) {
     console.error('获取币种状态失败:', error);
     return [];
+  }
+}
+
+/**
+ * 一次性抓取所有币种数据（全局浏览器会话）
+ */
+async function scrapeAllCoinsOnce(allCoinsToScrape, logPrefix) {
+  const startTime = Date.now();
+  const allCoinsData = {};
+  const coinResults = [];
+
+  console.log(`🌐 创建全局浏览器会话，一次性抓取 ${allCoinsToScrape.length} 个币种...`);
+
+  let sharedBrowser = null;
+  let sharedPage = null;
+
+  try {
+    // 初始化全局浏览器会话
+    sharedBrowser = await scraperService.initBrowser();
+    sharedPage = await sharedBrowser.newPage();
+    await sharedPage.setViewport({
+      width: scraperService.config.windowWidth,
+      height: scraperService.config.windowHeight
+    });
+
+    console.log('📖 访问 CoinGlass 页面...');
+    await sharedPage.goto(scraperService.config.coinglassBaseUrl, {
+      waitUntil: 'networkidle2',
+      timeout: scraperService.config.pageTimeout
+    });
+
+    console.log('⏳ 等待页面完全加载...');
+    await sharedPage.waitForTimeout(scraperService.config.waitTimes.initial);
+
+    // 按交易所分组币种，减少交易所切换次数
+    const coinsByExchange = {};
+    for (const coin of allCoinsToScrape) {
+      const exchange = coin.exchange || 'binance';
+      if (!coinsByExchange[exchange]) {
+        coinsByExchange[exchange] = [];
+      }
+      coinsByExchange[exchange].push(coin);
+    }
+
+    console.log(`📍 按交易所分组: ${Object.keys(coinsByExchange).join(', ')}`);
+
+    // 对每个交易所进行一次切换，然后抓取该交易所的所有币种
+    for (const [exchange, coins] of Object.entries(coinsByExchange)) {
+      console.log(`🔄 处理交易所: ${exchange} (${coins.length} 个币种)`);
+
+      // 智能切换交易所（每个交易所只切换一次）
+      await scraperService.switchExchangeIfNeeded(sharedPage, exchange);
+
+      // 抓取该交易所的所有币种
+      for (const coin of coins) {
+        try {
+          console.log(`🔄 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
+
+          const coinRateData = await scraperService.scrapeCoinGlassDataWithSession(
+            coin.exchange || 'binance',
+            coin.symbol,
+            coin.timeframe || '1h',
+            [coin.symbol],
+            sharedBrowser,
+            sharedPage
+          );
+
+          const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+
+          if (coinRateData && coinRateData.coins && coinRateData.coins[coinKey]) {
+            allCoinsData[coinKey] = coinRateData.coins[coinKey];
+            console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${coinRateData.coins[coinKey].annual_rate}%`);
+          } else {
+            console.warn(`⚠️ ${coin.symbol} 数据抓取失败`);
+            coinResults.push({
+              coin: coin.symbol,
+              exchange: coin.exchange,
+              timeframe: coin.timeframe,
+              success: false,
+              reason: 'scraping_failed'
+            });
+          }
+
+          // 币种间添加短暂延迟
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+        } catch (error) {
+          console.error(`❌ ${coin.symbol} 抓取过程中发生错误:`, error.message);
+          coinResults.push({
+            coin: coin.symbol,
+            exchange: coin.exchange,
+            timeframe: coin.timeframe,
+            success: false,
+            reason: 'scraping_error',
+            error: error.message
+          });
+        }
+      }
+    }
+
+    // 清理全局浏览器会话
+    try {
+      if (sharedBrowser) {
+        await sharedBrowser.close();
+        console.log('🌐 全局浏览器会话已关闭');
+      }
+    } catch (cleanupError) {
+      console.warn('⚠️ 浏览器会话清理警告:', cleanupError.message);
+    }
+
+    const duration = Date.now() - startTime;
+    console.log(`✅ 全局抓取完成: ${Object.keys(allCoinsData).length} 个币种成功，耗时: ${duration}ms`);
+
+    return {
+      success: true,
+      allCoinsData,
+      coinResults,
+      duration,
+      timestamp: formatDateTime(new Date())
+    };
+
+  } catch (sessionError) {
+    console.error('❌ 全局浏览器会话创建失败:', sessionError);
+
+    // 清理部分创建的资源
+    try {
+      if (sharedBrowser) {
+        await sharedBrowser.close();
+      }
+    } catch (cleanupError) {
+      console.warn('⚠️ 异常清理警告:', cleanupError.message);
+    }
+
+    // 如果会话创建失败，将所有币种标记为失败
+    for (const coin of allCoinsToScrape) {
+      coinResults.push({
+        coin: coin.symbol,
+        exchange: coin.exchange,
+        timeframe: coin.timeframe,
+        success: false,
+        reason: 'session_creation_failed',
+        error: sessionError.message
+      });
+    }
+
+    return {
+      success: false,
+      allCoinsData: {},
+      coinResults,
+      error: 'browser_session_failed',
+      errorMessage: sessionError.message
+    };
+  }
+}
+
+/**
+ * 仅处理分组通知（不进行数据抓取）
+ */
+async function processGroupNotificationsOnly(group, globalConfig, allScrapedData, skippedCoins = []) {
+  const logPrefix = `[分组${group.name}]`;
+
+  try {
+    // 获取该组启用的币种
+    const enabledCoins = group.coins.filter(c => c.enabled);
+    if (enabledCoins.length === 0) {
+      console.log(`⚠️ 分组 ${group.name} 没有启用的币种，跳过`);
+      return {
+        groupId: group.id,
+        groupName: group.name,
+        email: group.email,
+        triggeredCount: 0,
+        recoveredCount: 0,
+        enabledCoinsCount: 0,
+        success: true,
+        skipped: true
+      };
+    }
+
+    // 检查该组所有币种的阈值
+    const triggeredCoins = [];
+
+    for (const coin of enabledCoins) {
+      const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+      const coinData = allScrapedData.allCoinsData?.[coinKey];
+
+      if (!coinData) {
+        console.warn(`⚠️ 币种 ${coin.symbol} 数据不存在，跳过阈值检查`);
+        continue;
+      }
+
+      const currentRate = coinData.annual_rate;
+      const threshold = coin.threshold;
+
+      console.log(`🔍 检查币种 ${coin.symbol}: 当前利率 ${currentRate}% vs 阈值 ${threshold}%`);
+
+      // 检查阈值
+      if (currentRate > threshold) {
+        console.log(`🚨 ${coin.symbol} 触发警报，利率 ${currentRate}% > 阈值 ${threshold}%`);
+        triggeredCoins.push({
+          ...coin,
+          current_rate: currentRate,
+          currentRate, // 保留兼容性
+          excess: ((currentRate - coin.threshold) / coin.threshold * 100).toFixed(1),
+          coinData
+        });
+      }
+    }
+
+    // 发送邮件通知
+    if (triggeredCoins.length > 0) {
+      console.log(`📧 准备发送 ${group.name} 的警报通知: ${triggeredCoins.length} 个币种`);
+
+      // 这里调用邮件发送逻辑
+      const emailSuccess = await emailService.sendGroupAlert(
+        group,
+        triggeredCoins,
+        allScrapedData.allCoinsData,
+        globalConfig
+      );
+
+      return {
+        groupId: group.id,
+        groupName: group.name,
+        email: group.email,
+        triggeredCount: triggeredCoins.length,
+        recoveredCount: 0,
+        enabledCoinsCount: enabledCoins.length,
+        skippedCoinsCount: skippedCoins.length,
+        skippedCoins: skippedCoins.map(item => ({
+          symbol: item.coin.symbol,
+          exchange: item.coin.exchange,
+          timeframe: item.coin.timeframe,
+          threshold: item.coin.threshold,
+          remainingTime: item.remainingTime,
+          nextNotificationTime: item.nextNotificationTime
+        })),
+        emailSent: emailSuccess,
+        success: true
+      };
+    } else {
+      return {
+        groupId: group.id,
+        groupName: group.name,
+        email: group.email,
+        triggeredCount: 0,
+        recoveredCount: 0,
+        enabledCoinsCount: enabledCoins.length,
+        skippedCoinsCount: skippedCoins.length,
+        skippedCoins: skippedCoins.map(item => ({
+          symbol: item.coin.symbol,
+          exchange: item.coin.exchange,
+          timeframe: item.coin.timeframe,
+          threshold: item.coin.threshold,
+          remainingTime: item.remainingTime,
+          nextNotificationTime: item.nextNotificationTime
+        })),
+        emailSent: false,
+        success: true
+      };
+    }
+
+  } catch (error) {
+    console.error(`❌ 处理分组 ${group.name} 通知时发生异常:`, error);
+    return {
+      groupId: group.id,
+      groupName: group.name,
+      email: group.email,
+      success: false,
+      error: error.message
+    };
   }
 }
 

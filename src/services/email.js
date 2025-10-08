@@ -20,13 +20,10 @@ const emailConfig = {
  * 获取币种历史数据（支持多交易所、多时间框架）
  */
 function getCoinHistory(coinsData, coin, config) {
-  console.log(`🔍 开始历史数据匹配: 币种 ${coin.symbol}, 交易所 ${coin.exchange}, 时间框架 ${coin.timeframe}`);
-
   // 1. 优先尝试查找匹配的复合键（交易所+时间框架）
   const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
   let history = coinsData[coinKey]?.history || [];
   if (history.length > 0) {
-    console.log(`✅ 历史数据匹配: 使用复合键 ${coinKey}, 找到 ${history.length} 条历史数据`);
     return history;
   }
 
@@ -36,7 +33,6 @@ function getCoinHistory(coinsData, coin, config) {
         data.exchange === coin.exchange &&
         data.timeframe === coin.timeframe &&
         data.history && data.history.length > 0) {
-      console.log(`✅ 历史数据匹配: 遍历精确匹配找到 ${key}, 找到 ${data.history.length} 条历史数据`);
       return data.history;
     }
   }
@@ -46,7 +42,6 @@ function getCoinHistory(coinsData, coin, config) {
     if (data.symbol === coin.symbol &&
         data.exchange === coin.exchange &&
         data.history && data.history.length > 0) {
-      console.log(`⚠️ 历史数据匹配: 交易所匹配找到 ${key}, 找到 ${data.history.length} 条历史数据 (时间框架可能不匹配)`);
       return data.history;
     }
   }
@@ -54,7 +49,6 @@ function getCoinHistory(coinsData, coin, config) {
   // 4. 最后尝试：直接匹配币种符号（仅在没有其他匹配时使用）
   history = coinsData[coin.symbol]?.history || [];
   if (history.length > 0) {
-    console.log(`⚠️ 历史数据匹配: 仅使用币种符号 ${coin.symbol}, 找到 ${history.length} 条历史数据 (交易所和时间框架可能不匹配)`);
     return history;
   }
 
@@ -135,8 +129,7 @@ function generateMonitoringSettingsInfo(config) {
  * 发送警报邮件
  */
 export async function sendAlert(env, coin, currentRate, rateData, config) {
-  loggerService.info(`[邮件服务] 发送警报: ${coin.symbol} 当前利率 ${currentRate}% 超过阈值 ${coin.threshold}%`);
-  console.log(`发送警报: ${coin.symbol} 当前利率 ${currentRate}% 超过阈值 ${coin.threshold}%`);
+  console.log(`📧 发送警报: ${coin.symbol} 当前利率 ${currentRate}% 超过阈值 ${coin.threshold}%`);
 
   try {
     const alertData = {
@@ -348,7 +341,7 @@ function prepareAlertEmail(alertData, env, config = null) {
     // 继续构建其他部分...
     const maxCoinsInTitle = 4;
     const coinSummaries = triggeredCoins.slice(0, maxCoinsInTitle).map(coin => `${coin.symbol}(${coin.current_rate}%)`).join(' ');
-    const title = `${formatDateTime(new Date())} | ${coinSummaries}${triggeredCoins.length > maxCoinsInTitle ? '...' : ''}`;
+    const title = `${coinSummaries}${triggeredCoins.length > maxCoinsInTitle ? '...' : ''}`;
 
     const monitoringSettings = generateMonitoringSettingsInfo(config);
 
@@ -450,12 +443,6 @@ function prepareAlertEmail(alertData, env, config = null) {
           })
         };
 
-        // 调试日志：检查每个币种的历史数据（第一个分支）
-        console.log(`🔧 邮件数据调试-分支1 ${symbolDisplay} (${result.exchange}/${result.timeframe}):`);
-        console.log(`  - 历史数据原始数量: ${coinHistory.length}`);
-        console.log(`  - 格式化后历史数据数量: ${coinData.history.length}`);
-        console.log(`  - 历史数据样例:`, coinData.history[0]);
-
         return coinData;
       })
       .filter(coin => coin !== null) // 过滤掉未超过阈值的币种
@@ -506,22 +493,16 @@ function prepareAlertEmail(alertData, env, config = null) {
           })
         };
 
-        // 调试日志：检查每个币种的历史数据
-        console.log(`🔧 邮件数据调试 ${symbol} (${exchange}/${timeframe}):`);
-        console.log(`  - 历史数据原始数量: ${coinHistory.length}`);
-        console.log(`  - 格式化后历史数据数量: ${coinData.history.length}`);
-        console.log(`  - 历史数据样例:`, coinData.history[0]);
-
         return coinData;
       })
       .sort((a, b) => parseFloat(b.current_rate) - parseFloat(a.current_rate));
   }
 
-  // 生成标题：时间 | 币种1(利率1) 币种2(利率2) ...
+  // 生成标题：币种1(利率1) 币种2(利率2) ...
   // 使用与内容相同的触发币种列表，确保一致性
   const maxCoinsInTitle = 4; // 增加到4个币种，因为你有3个币种触发
   const coinSummaries = triggeredCoins.slice(0, maxCoinsInTitle).map(coin => `${coin.symbol}(${coin.current_rate}%)`).join(' ');
-  const title = `${formatDateTime(new Date())} | ${coinSummaries}${triggeredCoins.length > maxCoinsInTitle ? '...' : ''}`;
+  const title = `${coinSummaries}${triggeredCoins.length > maxCoinsInTitle ? '...' : ''}`;
 
   // 构建所有币种状态数组（支持重复币种）
   let allCoinsStatus = [];
@@ -614,7 +595,7 @@ function prepareAlertEmail(alertData, env, config = null) {
  * 准备回落通知邮件数据
  */
 function prepareRecoveryEmail(recoveryData, env, config = null) {
-  const title = `${formatDateTimeCN(new Date())} | ${recoveryData.coin}-回落通知`;
+  const title = `${recoveryData.coin}-回落通知`;
 
   // 构建触发币种数组（回落通知时币种在正常范围内）
   const triggeredCoins = [{
@@ -676,7 +657,7 @@ function prepareRecoveryEmail(recoveryData, env, config = null) {
  * 准备测试邮件数据
  */
 function prepareTestEmail(testData) {
-  const title = `${formatDateTimeCN(new Date())} | CoinGlass监控系统测试`;
+  const title = `CoinGlass监控系统测试`;
 
   // 测试邮件的默认监控设置
   const testMonitoringSettings = {
@@ -762,8 +743,6 @@ async function sendEmailJS(env, emailData) {
     });
 
     if (response.status === 200) {
-      loggerService.info('[邮件服务] EmailJS 发送成功');
-      console.log('EmailJS 发送成功');
       return true;
     } else {
       const errorText = await response.text();
@@ -781,8 +760,6 @@ async function sendEmailJS(env, emailData) {
  */
 export async function sendMultiCoinAlert(triggeredCoins, rateData, config) {
   console.log(`发送多币种警报: ${triggeredCoins.length} 个币种触发阈值`);
-  console.log(`🔍 调试: rateData.scraping_info存在? ${!!rateData.scraping_info}`);
-  console.log(`🔍 调试: individual_results长度: ${rateData.scraping_info?.individual_results?.length || 0}`);
 
   try {
     const alertData = {
@@ -806,7 +783,6 @@ export async function sendMultiCoinAlert(triggeredCoins, rateData, config) {
 
     // 构建类似单币种的alertData结构，但包含所有触发币种
     const scrapingSummary = rateData.scraping_info?.individual_results || [];
-    console.log(`🔧 修复调试: scrapingSummary长度=${scrapingSummary.length}, rateData.scraping_info存在=${!!rateData.scraping_info}`);
 
     const unifiedAlertData = {
       type: 'alert',
@@ -850,8 +826,7 @@ export async function sendMultiCoinAlert(triggeredCoins, rateData, config) {
  * 发送分组警报邮件 - 新的邮件分组功能
  */
 export async function sendGroupAlert(group, triggeredCoins, allCoinsData, globalConfig) {
-  console.log(`发送分组警报: ${group.name} - ${triggeredCoins.length} 个币种触发阈值`);
-  console.log(`🔍 分组信息: ID=${group.id}, 邮箱=${group.email}`);
+  console.log(`📧 发送分组警报: ${group.name} -> ${group.email} (${triggeredCoins.length}个币种)`);
 
   try {
     // 生成简洁的邮件标题
@@ -861,11 +836,11 @@ export async function sendGroupAlert(group, triggeredCoins, allCoinsData, global
       .map(coin => `${coin.symbol}(${coin.current_rate}%)`)
       .join(' ');
 
-    const title = `${group.name} | ${formatDateTime(new Date())} | ${coinSummaries}${
+    const title = `${group.name} | ${coinSummaries}${
       triggeredCoins.length > maxCoinsInTitle ? '...' : ''
     }`;
 
-    console.log(`📧 邮件标题: ${title}`);
+  // 邮件标题已生成，无需输出
 
     // 构建分组邮件数据
     const groupAlertData = {
@@ -896,12 +871,11 @@ export async function sendGroupAlert(group, triggeredCoins, allCoinsData, global
     const success = await sendEmailJS(env, emailData);
 
     if (success) {
-      console.log(`✅ 分组警报邮件发送成功: ${group.name} -> ${group.email}`);
-      console.log(`   触发币种: ${triggeredCoins.map(c => c.symbol).join(', ')}`);
+      console.log(`✅ 邮件发送成功: ${group.name} -> ${triggeredCoins.map(c => `${c.symbol}(${c.current_rate}%)`).join(', ')}`);
       // 记录发送历史
       await storageService.recordEmailHistory(groupAlertData);
     } else {
-      console.error(`❌ 分组警报邮件发送失败: ${group.name}`);
+      console.error(`❌ 邮件发送失败: ${group.name}`);
     }
 
     return success;
@@ -979,7 +953,7 @@ function prepareGroupAlertEmail(groupAlertData, globalConfig) {
   const coinSummaries = formattedTriggeredCoins.slice(0, maxCoinsInTitle)
     .map(coin => `${coin.symbol}(${coin.current_rate}%)`)
     .join(' ');
-  const title = `${group.name} | ${formatDateTime(new Date())} | ${coinSummaries}${
+  const title = `${group.name} | ${coinSummaries}${
     formattedTriggeredCoins.length > maxCoinsInTitle ? '...' : ''
   }`;
 

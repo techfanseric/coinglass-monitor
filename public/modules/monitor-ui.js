@@ -165,7 +165,7 @@ class MonitorUI {
             const statusClass = state.status === 'alert' ? '#ef4444' :
                                state.status === 'normal' ? '#10b981' : '#f59e0b';
             const statusText = state.status === 'alert' ? '警报' :
-                              state.status === 'normal' ? '正常' : '冷却中';
+                              state.status === 'normal' ? '正常' : '冷却期内';
 
             // 格式化时间显示
             const timeframeText = coin.timeframe === '1h' ? '每小时' :
@@ -316,7 +316,7 @@ class MonitorUI {
     }
 
     // 暂停/继续通知
-    async togglePause(coinSymbol, menuIndex) {
+    async togglePause(coinSymbol, groupId, exchange, timeframe, menuIndex) {
         // 关闭菜单
         this.closeAllMoreMenus();
         try {
@@ -325,7 +325,12 @@ class MonitorUI {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ coinSymbol })
+                body: JSON.stringify({
+                    coinSymbol,
+                    groupId,
+                    exchange,
+                    timeframe
+                })
             });
 
             // 检测302重定向（会话失效）
@@ -338,7 +343,11 @@ class MonitorUI {
 
             if (result.success) {
                 // 刷新状态显示，不显示提示
-                this.loadStatus();
+                await this.loadStatus();
+                // 同时刷新邮件分组界面以更新冷却状态
+                if (window.appConfig?.renderEmailGroups) {
+                    await window.appConfig.renderEmailGroups();
+                }
             } else {
                 // 静默失败，不显示错误
             }
@@ -368,9 +377,8 @@ class MonitorUI {
             // 禁用按钮并显示初始状态
             triggerBtn.disabled = true;
             triggerBtn.style.opacity = '0.5';
-            triggerBtn.textContent = '⏳';
+            triggerBtn.textContent = '▶';
             triggerStatus.style.display = 'inline';
-            triggerStatus.textContent = '开始监控检查...';
 
             window.appUtils?.showAlert?.('正在触发监控检查...', 'info');
 
@@ -492,10 +500,23 @@ class MonitorUI {
             oldContainer.remove();
         }
 
+        // 设置显示样式
         triggerStatus.style.display = 'block';
-        triggerStatus.textContent = '等待监控日志...';
-        triggerStatus.style.fontFamily = 'Courier New, monospace';
+        triggerStatus.style.whiteSpace = 'nowrap';
         triggerStatus.style.fontSize = '12px';
+        triggerStatus.style.lineHeight = '1.4';
+        triggerStatus.style.textAlign = 'left';
+        triggerStatus.style.padding = '2px 4px';
+        triggerStatus.style.backgroundColor = 'transparent';
+        triggerStatus.style.border = 'none';
+        triggerStatus.style.borderRadius = '0';
+        triggerStatus.style.overflow = 'hidden';
+        triggerStatus.style.textOverflow = 'ellipsis';
+        triggerStatus.style.color = '#6b7280'; // 普通灰色
+        triggerStatus.style.fontFamily = 'monospace';
+
+        // 开始旋转动画（会自动显示初始文本）
+        this.startSpinnerAnimation(triggerStatus);
 
         // 存储当前日志数量，用于增量更新
         this.currentLogCount = 0;
@@ -503,36 +524,64 @@ class MonitorUI {
 
   // 更新真实日志显示
     updateRealtimeLog(status) {
-        const triggerStatus = document.getElementById('triggerStatus');
-
         if (!status.logs) return;
 
-        // 增量更新日志 - 只显示新的日志条目
-        if (status.logs.length > this.currentLogCount) {
-            // 获取最新日志
-            const latestLog = status.logs[status.logs.length - 1] || '';
+        // 更新当前日志文本（去掉时间戳）
+        if (status.logs.length > 0) {
+            // 获取最新的一条日志
+            const latestLog = status.logs[status.logs.length - 1];
 
-            // 清理日志：去掉时间戳 [YYYY-MM-DD HH:MM:SS]
-            const cleanLog = latestLog.replace(/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s*/, '');
+            // 彻底清理日志：去掉时间戳 [YYYY-MM-DD HH:MM:SS] 和其他可能的时间格式
+            let cleanLog = latestLog
+                .replace(/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s*/, '') // 标准时间戳
+                .replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '') // 简化时间戳
+                .trim(); // 去除首尾空格
 
-            // 根据日志内容设置颜色
-            let color = '#374151'; // 默认深灰色
-            if (cleanLog.includes('成功') || cleanLog.includes('完成')) {
-                color = '#059669'; // 深绿色
-            } else if (cleanLog.includes('失败') || cleanLog.includes('错误')) {
-                color = '#dc2626'; // 深红色
-            } else if (cleanLog.includes('警告') || cleanLog.includes('注意')) {
-                color = '#d97706'; // 深黄色
-            }
-
-            // 直接显示纯文本
-            triggerStatus.textContent = cleanLog;
-            triggerStatus.style.color = color;
-
-            // 更新当前日志计数
-            this.currentLogCount = status.logs.length;
+            // 更新当前日志文本（旋转动画会自动显示新文本）
+            this.currentLogText = cleanLog;
         }
     }
+
+    // 开始旋转动画
+    startSpinnerAnimation(element) {
+        const spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+        // 清理可能存在的旧动画
+        if (this.spinnerInterval) {
+            clearInterval(this.spinnerInterval);
+        }
+
+        // 初始化旋转状态
+        this.spinnerIndex = 0;
+        this.spinners = spinners;
+        this.currentLogText = '开始监控检查...';
+
+        // 开始独立的旋转动画
+        this.spinnerInterval = setInterval(() => {
+            this.spinnerIndex = (this.spinnerIndex + 1) % this.spinners.length;
+            this.updateDisplayWithSpinner(element);
+        }, 100); // 每100ms切换一个字符
+    }
+
+    // 更新显示（旋转字符+当前日志）
+    updateDisplayWithSpinner(element) {
+        const currentSpinner = this.spinners[this.spinnerIndex];
+        element.textContent = currentSpinner + ' ' + this.currentLogText;
+    }
+
+    // 获取当前旋转字符
+    getCurrentSpinner() {
+        return this.spinners ? this.spinners[this.spinnerIndex] : '⠋';
+    }
+
+    // 停止旋转动画
+    stopSpinnerAnimation() {
+        if (this.spinnerInterval) {
+            clearInterval(this.spinnerInterval);
+            this.spinnerInterval = null;
+        }
+    }
+
 
     // 隐藏实时日志
     hideRealtimeLog() {
@@ -541,6 +590,8 @@ class MonitorUI {
             triggerStatus.style.display = 'none';
             triggerStatus.textContent = '';
             this.currentLogCount = 0;
+            // 停止旋转动画
+            this.stopSpinnerAnimation();
         }
     }
 
@@ -570,8 +621,12 @@ class MonitorUI {
         window.appUtils?.showAlert?.(successMessage, 'success');
 
         // 触发后刷新状态
-        setTimeout(() => {
-            this.loadStatus();
+        setTimeout(async () => {
+            await this.loadStatus();
+            // 同时刷新邮件分组界面以更新冷却状态
+            if (window.appConfig?.renderEmailGroups) {
+                await window.appConfig.renderEmailGroups();
+            }
         }, 2000);
 
         // 3秒后恢复按钮状态并隐藏日志

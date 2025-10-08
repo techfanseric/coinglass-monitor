@@ -52,8 +52,7 @@ export class StorageService {
 
         // 保存迁移后的配置
         await this.saveConfig(migratedConfig);
-        console.log('✅ 配置迁移完成');
-        loggerService.info('[存储服务] 配置已自动迁移到邮件分组格式');
+        console.log('✅ 配置已自动迁移到邮件分组格式');
 
         return migratedConfig;
       }
@@ -106,7 +105,7 @@ export class StorageService {
             email: oldConfig.email || '',
             coins: oldConfig.coins.map(coin => ({
               symbol: coin.symbol,
-              exchange: coin.exchange || 'binance',
+              exchange: coin.exchange || 'OKX',
               timeframe: coin.timeframe || '1h',
               threshold: coin.threshold || 5.0,
               enabled: coin.enabled !== false
@@ -216,12 +215,11 @@ export class StorageService {
         updated_at: formatDateTime(new Date())
       };
       await this.saveState(state);
-      loggerService.info(`[存储服务] 币种 ${coinSymbol} 状态更新: ${status}，数据: ${JSON.stringify({
+      console.log(`💾 币种 ${coinSymbol} 状态更新: ${status}，数据: ${JSON.stringify({
         last_rate: data.last_rate,
         last_notification: data.last_notification,
         next_notification: data.next_notification
       })}`);
-      console.log(`💾 币种 ${coinSymbol} 状态更新: ${status}`);
       return true;
     } catch (error) {
       console.error(`❌ 更新币种 ${coinSymbol} 状态失败:`, error);
@@ -247,7 +245,6 @@ export class StorageService {
       };
 
       await this.saveState(state);
-      loggerService.info(`[存储服务] 分组 ${groupId} 状态更新: ${status}`);
       console.log(`💾 分组 ${groupId} 状态更新: ${status}`);
       return true;
     } catch (error) {
@@ -519,7 +516,7 @@ export class StorageService {
           coins: [
             {
               symbol: 'USDT',
-              exchange: 'binance',
+              exchange: 'OKX',
               timeframe: '1h',
               threshold: 5.0,
               enabled: true
@@ -572,11 +569,9 @@ export class StorageService {
       await fs.writeFile(backupPath, JSON.stringify(backupData, null, 2));
 
       console.log(`💾 数据备份成功: ${backupPath}`);
-      loggerService.info(`[存储服务] 创建备份文件: ${backupPath}`);
       return backupPath;
     } catch (error) {
-      console.error('❌ 数据备份失败:', error);
-      loggerService.error(`[存储服务] 备份失败: ${error.message}`);
+      console.error(`❌ 数据备份失败: ${error.message}`);
       return null;
     }
   }
@@ -592,11 +587,9 @@ export class StorageService {
       // 清理超过7天的邮件历史（已在logger.js中实现）
       // 清理超过7天的抓取历史（已在logger.js中实现）
 
-      console.log('🧹 数据清理完成');
-      loggerService.info('[存储服务] 数据清理任务完成');
+      console.log('🧹 数据清理任务完成');
     } catch (error) {
-      console.error('❌ 数据清理失败:', error);
-      loggerService.error(`[存储服务] 数据清理失败: ${error.message}`);
+      console.error(`❌ 数据清理失败: ${error.message}`);
     }
   }
 
@@ -668,7 +661,6 @@ export class StorageService {
             const backupPath = path.join(backupDir, backup);
             await fs.unlink(backupPath);
             console.log(`🗑️  清理过期备份: ${backup} (创建时间: ${formatDateTime(backupTime)})`);
-            loggerService.info(`[存储服务] 清理过期备份: ${backup}`);
             cleanedCount++;
           }
         } catch (error) {
@@ -678,13 +670,11 @@ export class StorageService {
 
       if (cleanedCount > 0) {
         console.log(`✅ 清理完成，删除了 ${cleanedCount} 个过期备份文件`);
-        loggerService.info(`[存储服务] 清理完成，删除了 ${cleanedCount} 个过期备份文件`);
       } else {
         console.log('✅ 没有需要清理的过期备份文件');
       }
     } catch (error) {
-      console.error('❌ 清理备份文件失败:', error);
-      loggerService.error(`[存储服务] 清理备份文件失败: ${error.message}`);
+      console.error(`❌ 清理备份文件失败: ${error.message}`);
     }
   }
 }

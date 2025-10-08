@@ -4,6 +4,7 @@ echo "Starting CoinGlass Monitor (Production Mode with Auto-Restart)..."
 
 cd "$(dirname "$0")/.."
 export NODE_ENV=production
+export ENABLE_AUTO_UPDATE=true
 
 while true; do
     echo ""

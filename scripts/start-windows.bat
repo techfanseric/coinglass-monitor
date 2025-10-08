@@ -4,6 +4,7 @@ echo Starting CoinGlass Monitor (Production Mode with Auto-Restart)...
 
 cd /d "%~dp0.."
 set NODE_ENV=production
+set ENABLE_AUTO_UPDATE=true
 
 :restart
 cls

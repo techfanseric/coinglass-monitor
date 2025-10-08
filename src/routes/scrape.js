@@ -134,20 +134,45 @@ router.post('/coinglass', async (req, res) => {
     // 4. 币种数据抓取阶段
     scrapeTracker.updatePhase('scraping_coins', `开始抓取 ${enabledCoins.length} 个币种数据`);
 
-    // 为每个启用的币种独立抓取数据
-    for (const coin of enabledCoins) {
-      try {
-        // 开始处理单个币种
-        scrapeTracker.startCoin(coin.symbol, coin.exchange, coin.timeframe);
-        console.log(`🔄 开始抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
+    // 创建共享的浏览器会话，用于连续处理多个币种
+    console.log('🌐 创建共享浏览器会话用于批量抓取...');
+    let sharedBrowser = null;
+    let sharedPage = null;
 
-        // 直接进行真实抓取，无任何模拟
-        const coinData = await scraper.scrapeCoinGlassData(
-          coin.exchange || 'binance',  // 使用币种独立配置
-          coin.symbol,                  // 使用币种符号
-          coin.timeframe || '1h',       // 使用币种独立配置
-          [coin.symbol]                 // 只抓取当前币种
-        );
+    try {
+      // 初始化共享浏览器会话
+      sharedBrowser = await scraper.initBrowser();
+      sharedPage = await sharedBrowser.newPage();
+      await sharedPage.setViewport({
+        width: scraper.config.windowWidth,
+        height: scraper.config.windowHeight
+      });
+
+      console.log('📖 访问 CoinGlass 页面...');
+      await sharedPage.goto(scraper.config.coinglassBaseUrl, {
+        waitUntil: 'networkidle2',
+        timeout: scraper.config.pageTimeout
+      });
+
+      console.log('⏳ 等待页面完全加载...');
+      await sharedPage.waitForTimeout(scraper.config.waitTimes.initial);
+
+      // 为每个启用的币种复用浏览器会话进行抓取
+      for (const coin of enabledCoins) {
+        try {
+          // 开始处理单个币种
+          scrapeTracker.startCoin(coin.symbol, coin.exchange, coin.timeframe);
+          console.log(`🔄 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe})...`);
+
+          // 使用共享浏览器会话进行抓取
+          const coinData = await scraper.scrapeCoinGlassDataWithSession(
+            coin.exchange || 'binance',  // 使用币种独立配置
+            coin.symbol,                  // 使用币种符号
+            coin.timeframe || '1h',       // 使用币种独立配置
+            [coin.symbol],                // 只抓取当前币种
+            sharedBrowser,                // 复用浏览器实例
+            sharedPage                    // 复用页面实例
+          );
 
         // 检查数据是否存在 - 支持简单键和复合键查找
         let foundCoinData = null;
@@ -178,7 +203,7 @@ router.post('/coinglass', async (req, res) => {
           // 使用复合键存储独立的数据副本
           allCoinsData[coinKey] = coinDataWithMeta;
 
-          console.log(`✅ ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 数据抓取成功，利率: ${foundCoinData.annual_rate}%`);
+          console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${foundCoinData.annual_rate}%`);
 
           scrapingSummary.push({
             symbol: coin.symbol,
@@ -223,6 +248,31 @@ router.post('/coinglass', async (req, res) => {
         // 标记币种失败
         scrapeTracker.completeCoin(coin.symbol, false, null, error.message);
       }
+      }
+
+      // 清理共享浏览器会话
+      try {
+        if (sharedBrowser) {
+          await sharedBrowser.close();
+          console.log('🌐 共享浏览器会话已关闭');
+        }
+      } catch (cleanupError) {
+        console.warn('⚠️ 浏览器会话清理警告:', cleanupError.message);
+      }
+
+    } catch (sessionError) {
+      console.error('❌ 浏览器会话创建失败:', sessionError);
+
+      // 清理部分创建的资源
+      try {
+        if (sharedBrowser) {
+          await sharedBrowser.close();
+        }
+      } catch (cleanupError) {
+        console.warn('⚠️ 异常清理警告:', cleanupError.message);
+      }
+
+      throw new Error(`浏览器会话创建失败: ${sessionError.message}`);
     }
 
     const duration = Date.now() - startTime;
@@ -252,7 +302,7 @@ router.post('/coinglass', async (req, res) => {
       console.log(`⚠️  部分币种抓取失败，但继续处理已成功抓取的币种`);
     }
 
-    console.log(`✅ 多币种数据抓取完成，成功获取 ${Object.keys(allCoinsData).length} 个币种数据，耗时: ${duration}ms`);
+    console.log(`✅ 批量抓取完成: ${Object.keys(allCoinsData).length} 个币种，耗时: ${duration}ms`);
     console.log('📊 抓取摘要:', scrapingSummary.map(r => `${r.symbol}(${r.exchange}/${r.timeframe}):${r.success?'✅':'❌'}`).join(', '));
 
     // 5. 保存抓取结果到历史记录
@@ -334,13 +384,20 @@ async function runCompleteMonitorCheck(rateData, config, enabledCoins) {
 
   try {
     console.log('📊 检查币种阈值...');
-    console.log(`📋 抓取到的币种: ${Object.keys(rateData.coins).join(', ')}`);
 
     // 检查每个启用的币种
     const triggeredCoins = []; // 收集所有触发警报的币种
 
     for (const coin of enabledCoins) {
-      console.log(`🔍 处理币种: ${coin.symbol} (${coin.exchange}/${coin.timeframe})`);
+      // 先检查数据是否存在，再输出处理日志
+      const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+      let coinData = rateData.coins[coinKey] || rateData.coins[coin.symbol];
+
+      if (coinData?.annual_rate) {
+        console.log(`🔍 处理币种: ${coin.symbol} (${coin.exchange}/${coin.timeframe}) -> 利率 ${coinData.annual_rate}%`);
+      } else {
+        console.log(`🔍 处理币种: ${coin.symbol} (${coin.exchange}/${coin.timeframe}) -> 数据不存在`);
+      }
 
       try {
         const coinResult = await checkCoinThresholdComplete(coin, rateData, config, true); // 手动触发标识
@@ -408,8 +465,6 @@ async function runCompleteMonitorCheck(rateData, config, enabledCoins) {
 
         // 只为启用的组发送邮件
         if (group.enabled !== false && group.email && group.email.trim() !== '') {
-          console.log(`📧 发送组警报: ${group.name} (${group.email}) - ${groupTriggeredCoins.length} 个币种`);
-
           const groupSuccess = await emailService.sendGroupAlert(
             group,
             groupTriggeredCoins,
@@ -419,9 +474,6 @@ async function runCompleteMonitorCheck(rateData, config, enabledCoins) {
 
           if (groupSuccess) {
             results.alerts_sent += groupTriggeredCoins.length;
-            console.log(`✅ ${group.name} 邮件发送成功，包含 ${groupTriggeredCoins.length} 个币种`);
-          } else {
-            console.error(`❌ ${group.name} 邮件发送失败`);
           }
         } else {
           console.log(`⏭️ 跳过禁用或无效邮件组: ${group.name || groupId}`);
@@ -474,7 +526,7 @@ async function checkCoinThresholdComplete(coin, rateData, config, isManualTrigge
       return result;
     }
 
-    console.log(`✅ 找到币种数据: ${coin.symbol} (${coin.exchange}/${coin.timeframe}) -> 利率 ${currentRate}%`);
+    // 找到币种数据信息已在前面处理币种时输出
 
     result.current_rate = currentRate;
 

@@ -31,6 +31,41 @@ function validateTimeFormat(timeStr) {
 }
 
 /**
+ * 标准化交易所名称
+ */
+function normalizeExchangeName(exchange) {
+  if (!exchange || typeof exchange !== 'string') {
+    return exchange;
+  }
+
+  const normalized = exchange.toLowerCase();
+  switch (normalized) {
+    case 'binance': return 'Binance';
+    case 'okx': return 'OKX';
+    case 'bybit': return 'Bybit';
+    case 'huobi': return 'Huobi';
+    case 'kucoin': return 'KuCoin';
+    case 'mexc': return 'MEXC';
+    case 'gate.io':
+    case 'gate':
+      return 'Gate.io';
+    case 'bitget': return 'Bitget';
+    case 'crypto.com':
+    case 'crypto':
+      return 'Crypto.com';
+    case 'coinbase': return 'Coinbase';
+    case 'kraken': return 'Kraken';
+    case 'ftx': return 'FTX';
+    case 'bitfinex': return 'Bitfinex';
+    case 'bittrex': return 'Bittrex';
+    case 'poloniex': return 'Poloniex';
+    default:
+      // 对于未知交易所，首字母大写其余小写
+      return exchange.charAt(0).toUpperCase() + exchange.slice(1).toLowerCase();
+  }
+}
+
+/**
  * 验证并修复 notification_hours 配置
  */
 function validateNotificationHours(notificationHours) {
@@ -131,7 +166,7 @@ router.post('/', async (req, res) => {
     // 验证和标准化币种配置
     const validatedCoins = Array.isArray(config.coins) ? config.coins.map(coin => ({
       symbol: coin.symbol || 'USDT',
-      exchange: coin.exchange || 'binance',
+      exchange: normalizeExchangeName(coin.exchange) || 'OKX',
       timeframe: coin.timeframe || '1h',
       threshold: Number(coin.threshold) || 5.0,
       enabled: Boolean(coin.enabled !== false), // 默认启用
@@ -144,7 +179,7 @@ router.post('/', async (req, res) => {
       // 移除全局 monitoring_enabled，改为基于邮件组的控制
       // 保留filters以维持向后兼容，但不再强制使用
       filters: {
-        exchange: config.filters?.exchange || 'binance',
+        exchange: normalizeExchangeName(config.filters?.exchange) || 'OKX',
         coin: config.filters?.coin || 'USDT',
         timeframe: config.filters?.timeframe || '1h',
         ...config.filters
@@ -159,7 +194,7 @@ router.post('/', async (req, res) => {
         enabled: Boolean(group.enabled !== false), // 默认启用，除非明确禁用
         coins: Array.isArray(group.coins) ? group.coins.map(coin => ({
           symbol: coin.symbol || '',
-          exchange: coin.exchange || 'binance',
+          exchange: normalizeExchangeName(coin.exchange) || 'OKX',
           timeframe: coin.timeframe || '1h',
           threshold: Number(coin.threshold) || 1,
           enabled: Boolean(coin.enabled !== false), // 默认启用，除非明确禁用

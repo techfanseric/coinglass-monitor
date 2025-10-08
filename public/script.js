@@ -40,7 +40,13 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // 按配置间隔更新状态，保持触发按钮状态
-    setInterval(() => window.appMonitorUI.loadStatus(true), window.appState.frontendConfig.updateInterval);
+    setInterval(async () => {
+        await window.appMonitorUI.loadStatus(true);
+        // 同时刷新邮件分组界面以更新冷却状态
+        if (window.appConfig?.renderEmailGroups) {
+            await window.appConfig.renderEmailGroups();
+        }
+    }, window.appState.frontendConfig.updateInterval);
 
     // 设置增强日志功能
     window.appSystem.setupEnhancedLogging();

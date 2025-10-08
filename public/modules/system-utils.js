@@ -449,9 +449,15 @@ document.addEventListener('DOMContentLoaded', function() {
     document.addEventListener('click', function(event) {
         const isClickInsideMenu = event.target.closest('.more-menu');
         if (!isClickInsideMenu) {
+            // 关闭监控UI的菜单
             if (window.appMonitorUI) {
                 window.appMonitorUI.closeAllMoreMenus();
             }
+            // 关闭配置管理的分组菜单
+            const groupMenus = document.querySelectorAll('[id^="groupMenu_"]');
+            groupMenus.forEach(menu => {
+                menu.classList.remove('show');
+            });
         }
     });
 

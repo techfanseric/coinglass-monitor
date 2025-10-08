@@ -93,7 +93,6 @@ export class DataCleanupService {
     };
 
     console.log('🧹 开始执行全面数据清理...');
-    loggerService.info('[数据清理服务] 开始执行全面数据清理');
 
     try {
       // 并行清理所有目录
@@ -131,7 +130,6 @@ export class DataCleanupService {
             error: error.message
           });
           console.error(`❌ 清理${dirConfig.name}失败:`, error.message);
-          loggerService.error(`[数据清理服务] 清理${dirConfig.name}失败: ${error.message}`);
         }
       });
 
@@ -156,11 +154,10 @@ export class DataCleanupService {
         console.log(`   📂 处理目录: ${results.summary.totalDirectoriesProcessed} 个`);
         console.log(`   ⏱️  耗时: ${results.duration}ms`);
 
-        loggerService.info(`[数据清理服务] 清理完成 - 文件:${results.details.files.count}个, 日志:${results.details.logs.lines}行, 空间:${(results.summary.totalSizeFreed / 1024 / 1024).toFixed(2)}MB, 耗时:${results.duration}ms`);
+        console.log(`✅ 数据清理完成 - 文件:${results.details.files.count}个, 日志:${results.details.logs.lines}行, 空间:${(results.summary.totalSizeFreed / 1024 / 1024).toFixed(2)}MB, 耗时:${results.duration}ms`);
       } else {
         const totalItems = results.details.files.count + results.details.logs.lines;
         console.log(`✅ 数据清理完成: 删除 ${totalItems} 个项目，释放 ${(results.summary.totalSizeFreed / 1024 / 1024).toFixed(2)}MB，耗时 ${results.duration}ms`);
-        loggerService.info(`[数据清理服务] 清理完成: 删除${totalItems}个项目，释放${(results.summary.totalSizeFreed / 1024 / 1024).toFixed(2)}MB，耗时${results.duration}ms`);
       }
 
       if (results.errors.length > 0) {
@@ -172,7 +169,6 @@ export class DataCleanupService {
 
     } catch (error) {
       console.error('❌ 数据清理过程失败:', error);
-      loggerService.error(`[数据清理服务] 清理过程失败: ${error.message}`);
       results.success = false;
       results.errors.push({ error: error.message });
       return results;

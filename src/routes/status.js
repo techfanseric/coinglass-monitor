@@ -36,7 +36,7 @@ router.get('/', async (req, res) => {
             const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
             const coinState = groupState.coin_states?.[coinStateKey] || { status: 'normal' };
 
-            coinStates[coin.symbol] = {
+            coinStates[coinStateKey] = {
               ...coinState,
               last_rate: coinState.last_rate
             };
@@ -460,10 +460,9 @@ router.get('/logs', async (req, res) => {
  */
 router.post('/cooldown/reset', async (req, res) => {
   try {
-    const { coinSymbol } = req.body;
+    const { coinSymbol, groupId, exchange, timeframe } = req.body;
 
-    loggerService.info(`[状态管理] 请求重置币种冷却期: ${coinSymbol || '未知'}`);
-    console.log('🔄 请求重置冷却期');
+    console.log(`🔄 请求重置币种冷却期: ${coinSymbol || '未知'} | 分组: ${groupId || '未知'}`);
 
     if (!coinSymbol) {
       return res.status(400).json({
@@ -474,37 +473,78 @@ router.post('/cooldown/reset', async (req, res) => {
       });
     }
 
-    // 获取当前币种状态
-    const coinState = await storageService.getCoinState(coinSymbol);
+    let coinState = null;
+    let success = false;
 
-    if (!coinState || coinState.status !== 'alert') {
-      return res.status(400).json({
-        success: false,
-        error: '币种不在警报状态',
-        message: `币种 ${coinSymbol} 当前不在警报状态，无需重置冷却期`,
-        current_status: coinState?.status || 'unknown',
-        timestamp: formatDateTime(new Date())
-      });
+    // 如果提供了分组信息，优先使用分组监控格式
+    if (groupId && exchange && timeframe) {
+      const groupState = await storageService.getGroupState(groupId);
+      const coinStateKey = `${coinSymbol}_${exchange}_${timeframe}`;
+      coinState = groupState.coin_states?.[coinStateKey];
+
+      if (!coinState || coinState.status !== 'alert') {
+        return res.status(400).json({
+          success: false,
+          error: '币种不在警报状态',
+          message: `币种 ${coinSymbol} (${exchange}/${timeframe}) 当前不在警报状态，无需重置冷却期`,
+          current_status: coinState?.status || 'unknown',
+          timestamp: formatDateTime(new Date())
+        });
+      }
+
+      // 重置冷却期：将next_notification设置为当前时间前1分钟
+      const now = new Date();
+      const pastTime = new Date(now.getTime() - 60 * 1000); // 1分钟前
+
+      const updatedState = {
+        ...coinState,
+        next_notification: formatDateTime(pastTime),
+        cooldown_reset_at: formatDateTime(now),
+        cooldown_reset_by: 'manual',
+        updated_at: formatDateTime(now)
+      };
+
+      // 更新分组状态中的币种状态
+      groupState.coin_states[coinStateKey] = updatedState;
+      success = await storageService.updateGroupState(groupId, 'alert', groupState);
+
+      if (success) {
+        console.log(`✅ 分组币种 ${coinSymbol} (${exchange}/${timeframe}) 冷却期已重置，下次通知时间: ${formatDateTime(pastTime)}`);
+      }
+    } else {
+      // 向下兼容：使用旧的单一币种格式
+      coinState = await storageService.getCoinState(coinSymbol);
+
+      if (!coinState || coinState.status !== 'alert') {
+        return res.status(400).json({
+          success: false,
+          error: '币种不在警报状态',
+          message: `币种 ${coinSymbol} 当前不在警报状态，无需重置冷却期`,
+          current_status: coinState?.status || 'unknown',
+          timestamp: formatDateTime(new Date())
+        });
+      }
+
+      // 重置冷却期：将next_notification设置为当前时间前1分钟
+      const now = new Date();
+      const pastTime = new Date(now.getTime() - 60 * 1000); // 1分钟前
+
+      const updatedState = {
+        ...coinState,
+        next_notification: formatDateTime(pastTime),
+        cooldown_reset_at: formatDateTime(now),
+        cooldown_reset_by: 'manual',
+        updated_at: formatDateTime(now)
+      };
+
+      success = await storageService.updateCoinState(coinSymbol, 'alert', updatedState);
+
+      if (success) {
+        console.log(`✅ 币种 ${coinSymbol} 冷却期已重置，下次通知时间: ${formatDateTime(pastTime)}`);
+      }
     }
 
-    // 重置冷却期：将next_notification设置为当前时间前1分钟
-    const now = new Date();
-    const pastTime = new Date(now.getTime() - 60 * 1000); // 1分钟前
-
-    const updatedState = {
-      ...coinState,
-      next_notification: formatDateTime(pastTime),
-      cooldown_reset_at: formatDateTime(now),
-      cooldown_reset_by: 'manual',
-      updated_at: formatDateTime(now)
-    };
-
-    // 保存更新后的状态
-    const success = await storageService.updateCoinState(coinSymbol, 'alert', updatedState);
-
     if (success) {
-      loggerService.info(`[状态管理] 币种 ${coinSymbol} 冷却期已重置，下次通知时间: ${formatDateTime(pastTime)}`);
-      console.log(`✅ 币种 ${coinSymbol} 冷却期已重置`);
       res.json({
         success: true,
         message: `币种 ${coinSymbol} 冷却期已重置，现在可以立即触发警报`,

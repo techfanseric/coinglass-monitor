@@ -25,6 +25,10 @@ Thumbs.db
 *.tmp
 *.temp
 
+# Cookie文件
+cookies.txt
+*.cookie
+
 # 构建输出
 dist/
 build/

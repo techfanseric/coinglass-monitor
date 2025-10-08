@@ -51,8 +51,7 @@ export class ScraperService {
       return this.browser;
     }
 
-    loggerService.info('[抓取服务] 正在启动 Puppeteer 浏览器');
-    console.log('🌐 正在启动 Puppeteer 浏览器...');
+    console.log('🌐 启动 Puppeteer 浏览器...');
 
     // 自动检测Chrome路径（Windows/Mac/Linux兼容）
     let executablePath;
@@ -86,7 +85,7 @@ export class ScraperService {
     };
 
     this.browser = await puppeteer.launch(options);
-    console.log('✅ Puppeteer 浏览器启动成功');
+    console.log('🌐 启动 Puppeteer 浏览器成功');
 
     return this.browser;
   }
@@ -111,37 +110,42 @@ export class ScraperService {
   }
 
   /**
-   * 抓取 CoinGlass 数据 - 支持多币种抓取
+   * 抓取 CoinGlass 数据 - 支持复用浏览器会话
    */
-  async scrapeCoinGlassData(exchange = 'binance', coin = 'USDT', timeframe = '1h', requestedCoins = null) {
-    let browser = null;
-    let page = null;
-
+  async scrapeCoinGlassDataWithSession(exchange = 'OKX', coin = 'USDT', timeframe = '1h', requestedCoins = null, browser = null, page = null) {
     try {
-      loggerService.info(`[抓取服务] 开始抓取 CoinGlass 数据: ${exchange}/${coin}/${timeframe}，目标币种: ${requestedCoins?.join(',') || '默认'}`);
-      console.log(`🕷️ 开始抓取 CoinGlass 数据: ${exchange}/${coin}/${timeframe}`);
+      console.log(`🕷️ 抓取 CoinGlass 数据: ${exchange}/${coin}/${timeframe}，目标币种: ${requestedCoins?.join(',') || '默认'}...`);
       if (requestedCoins) {
         console.log(`🎯 请求的币种: ${requestedCoins.join(', ')}`);
       }
 
-      // 初始化浏览器
-      browser = await this.initBrowser();
-      page = await browser.newPage();
-      await page.setViewport({ width: this.config.windowWidth, height: this.config.windowHeight });
+      // 使用现有浏览器会话或创建新的
+      let useBrowser = browser;
+      let usePage = page;
+      let shouldCleanup = false;
 
-      console.log('📖 访问 CoinGlass 页面...');
-      await page.goto(this.config.coinglassBaseUrl, {
-        waitUntil: 'networkidle2',
-        timeout: this.config.pageTimeout
-      });
+      if (!useBrowser || !usePage) {
+        console.log('🌐 启动新的浏览器会话...');
+        useBrowser = await this.initBrowser();
+        usePage = await useBrowser.newPage();
+        await usePage.setViewport({ width: this.config.windowWidth, height: this.config.windowHeight });
 
-      console.log('⏳ 等待页面完全加载...');
-      await page.waitForTimeout(this.config.waitTimes.initial);
+        console.log('📖 访问 CoinGlass 页面...');
+        await usePage.goto(this.config.coinglassBaseUrl, {
+          waitUntil: 'networkidle2',
+          timeout: this.config.pageTimeout
+        });
 
-      // === 切换交易所 ===
-      console.log(`🔄 切换到交易所: ${exchange}`);
-      await this.switchExchange(page, exchange);
-      await page.waitForTimeout(this.config.waitTimes.exchange);
+        console.log('⏳ 等待页面完全加载...');
+        await usePage.waitForTimeout(this.config.waitTimes.initial);
+        shouldCleanup = true;
+      } else {
+        console.log('📋 复用现有浏览器会话');
+      }
+
+      // === 智能切换交易所 ===
+      await this.switchExchangeIfNeeded(usePage, exchange);
+      await usePage.waitForTimeout(this.config.waitTimes.exchange);
 
       // 确定要抓取的币种列表
       const coinsToScrape = requestedCoins || [coin];
@@ -150,132 +154,112 @@ export class ScraperService {
       for (const targetCoin of coinsToScrape) {
         // 为重复币种创建唯一标识符（基于交易所和时间框架）
         const coinKey = `${targetCoin}_${exchange}_${timeframe}`;
-        console.log(`🔄 切换到币种: ${targetCoin} (标识符: ${coinKey})`);
-        await this.switchCoin(page, targetCoin);
+        await this.switchCoin(usePage, targetCoin);
         // 等待页面数据更新，特别是切换币种后需要更长时间
-        await page.waitForTimeout(this.config.waitTimes.coin);
+        await usePage.waitForTimeout(this.config.waitTimes.coin);
 
         // === 切换时间框架 (修复：总是执行时间框架切换) ===
-        console.log(`🔄 切换到时间框架: ${timeframe}`);
-        await this.switchTimeframe(page, timeframe);
-        await page.waitForTimeout(this.config.waitTimes.data);
+        await this.switchTimeframe(usePage, timeframe);
+        await usePage.waitForTimeout(this.config.waitTimes.data);
 
         // 验证切换结果
-        const switchVerification = await this.verifySwitchResult(page, exchange, targetCoin);
+        const switchVerification = await this.verifySwitchResult(usePage, exchange, targetCoin);
 
         if (!switchVerification.success) {
           console.warn(`⚠️ 切换验证失败: ${switchVerification.reason}`);
           // 重试一次
           if (switchVerification.currentCoin !== targetCoin) {
-            console.log(`🔄 重试切换币种: ${switchVerification.currentCoin} -> ${targetCoin}`);
-            await this.switchCoin(page, targetCoin);
-            await page.waitForTimeout(this.config.waitTimes.screenshot);
-          }
-
-          const reVerification = await this.verifySwitchResult(page, exchange, targetCoin);
-          if (!reVerification.success) {
-            console.warn(`⚠️ 币种 ${targetCoin} 抓取失败，跳过: ${reVerification.reason}`);
-            continue;
+            await this.switchCoin(usePage, targetCoin);
+            await usePage.waitForTimeout(this.config.waitTimes.retry);
+            await this.switchTimeframe(usePage, timeframe);
+            await usePage.waitForTimeout(this.config.waitTimes.data);
           }
         }
 
-        // 等待页面数据完全更新
-        await page.waitForTimeout(this.config.waitTimes.data);
+        // 截图（可选，用于调试）
+        if (process.env.COINGLASS_DEBUG_SCREENSHOTS === 'true') {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          const filename = `${timestamp}_${exchange}_${targetCoin}.png`;
+          const screenshotPath = path.join(this.config.screenshotDir, filename);
 
-        // 截图记录数据采集前的页面状态（仅在开发模式下）
-        try {
-          // 检查是否为开发模式
-          const isDevelopment = process.env.NODE_ENV === 'development';
-
-          if (isDevelopment) {
-            const screenshotDir = this.config.screenshotDir;
-            const screenshotPath = `${screenshotDir}/${this.generateScreenshotFilename(exchange, targetCoin)}`;
-
-            // 确保目录存在
-            await fs.promises.mkdir(screenshotDir, { recursive: true });
-
-            await page.screenshot({ path: screenshotPath, fullPage: true });
-            console.log(`📸 数据采集前截图已保存: ${screenshotPath}`);
-          } else {
-            console.log(`📸 生产模式跳过截图保存`);
+          // 确保截图目录存在
+          if (!fs.existsSync(path.dirname(screenshotPath))) {
+            fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
           }
-        } catch (screenshotError) {
-          console.log(`⚠️ 数据采集前截图失败: ${screenshotError.message}`);
+
+          await usePage.screenshot({ path: screenshotPath, fullPage: false });
+          console.log(`📸 数据采集前截图已保存: ${screenshotPath}`);
         }
 
-        // 数据提取
-        console.log(`📊 开始提取 ${targetCoin} 数据...`);
-        const coinData = await this.extractTableData(page, exchange, targetCoin);
+        // 提取数据
+        console.log(`📊 提取 ${targetCoin} 数据...`);
+        const extractedData = await this.extractTableData(usePage, exchange, targetCoin);
 
-        if (coinData && coinData.coins) {
-          // 使用唯一标识符存储数据，处理重复币种
-          const extractedCoinData = coinData.coins[targetCoin];
-          if (extractedCoinData) {
-            // 为复合键创建完整的数据副本，包含exchange和timeframe信息
-            const coinDataWithKey = { ...extractedCoinData };
-            coinDataWithKey.exchange = exchange;
-            coinDataWithKey.timeframe = timeframe;
-            coinDataWithKey.coin_key = coinKey;
+        if (extractedData && extractedData.coins && extractedData.coins[targetCoin]) {
+          console.log(`📊 成功提取真实数据: 找到 ${Object.keys(extractedData.coins).length} 个币种`);
 
-            // 对于重复币种，优先使用复合键存储，避免数据覆盖
-            allCoinsData[coinKey] = coinDataWithKey;
-            console.log(`💾 复合键数据存储: ${coinKey} -> 利率 ${coinDataWithKey.annual_rate}%, 历史数据 ${coinDataWithKey.history?.length || 0} 条`);
+          // 为重复币种创建唯一标识的数据副本
+          const coinDataWithKey = {
+            ...extractedData.coins[targetCoin],
+            exchange: exchange,
+            timeframe: timeframe,
+            coin_key: coinKey,
+            symbol_display: `${targetCoin} (${timeframe === '24h' ? '24小时' : timeframe})`,
+            scrape_timestamp: new Date().toISOString()
+          };
 
-            // 复合键存储已经完成，不再创建币种符号副本
-            // 这确保数据的唯一性和正确性，避免复合键被简单键覆盖
-            console.log(`✅ 复合键存储完成: ${coinKey} -> 利率 ${coinDataWithKey.annual_rate}%`);
+          // 对于重复币种，优先使用复合键存储，避免数据覆盖
+          allCoinsData[coinKey] = coinDataWithKey;
+          console.log(`💾 存储复合键数据: ${coinKey} -> 利率 ${coinDataWithKey.annual_rate}%, 历史数据 ${coinDataWithKey.history?.length || 0} 条...`);
 
-            // 验证复合键数据是否正确存储
-            if (!allCoinsData[coinKey]) {
-              console.error(`❌ 错误: 复合键 ${coinKey} 存储失败`);
-            } else {
-              console.log(`✅ 复合键 ${coinKey} 存储成功，exchange: ${allCoinsData[coinKey].exchange}, timeframe: ${allCoinsData[coinKey].timeframe}`);
-            }
+          // 复合键存储已经完成，不再创建币种符号副本
+          // 这确保数据的唯一性和正确性，避免复合键被简单键覆盖
 
-            console.log(`✅ ${targetCoin} (${coinKey}) 数据抓取成功，利率: ${extractedCoinData.annual_rate}%`);
+          // 验证复合键数据是否正确存储
+          if (!allCoinsData[coinKey]) {
+            console.error(`❌ 错误: 复合键 ${coinKey} 存储失败`);
           }
+
+          // 原来的成功日志位置（已删除）
         } else {
           console.warn(`⚠️ ${targetCoin} 数据提取失败`);
         }
-
-        // 币种间添加短暂延迟，避免请求过于频繁
-        await page.waitForTimeout(this.config.waitTimes.screenshot);
       }
 
-      // 构建最终结果
-      const result = {
-        exchange: exchange.toLowerCase(),
-        timestamp: formatDateTime(new Date()),
-        coins: allCoinsData,
-        page_analysis: {
-          title: `单交易所抓取完成 - ${coinsToScrape.length} 个币种`,
-          current_exchange: exchange,
-          current_timeframe: timeframe,
-          total_coins_found: Object.keys(allCoinsData).length,
-          requested_coins: coinsToScrape,
-          successfully_scraped: Object.keys(allCoinsData),
-          duplicate_coins_handled: coinsToScrape.length !== Object.keys(allCoinsData).length
+      // 关闭浏览器（仅当创建新会话时）
+      if (shouldCleanup) {
+        try {
+          await useBrowser.close();
+        } catch (closeError) {
+          console.warn('浏览器关闭警告:', closeError.message);
         }
+      }
+
+      return {
+        success: true,
+        exchange: exchange,
+        coins: allCoinsData,
+        timestamp: new Date().toISOString(),
+        total_coins: Object.keys(allCoinsData).length
       };
 
-      loggerService.info(`[抓取服务] 多币种数据抓取完成，成功获取 ${Object.keys(allCoinsData).length} 个币种数据: ${Object.keys(allCoinsData).join(', ')}`);
-      console.log(`✅ 多币种数据抓取完成，成功获取 ${Object.keys(allCoinsData).length} 个币种数据`);
-      return result;
-
     } catch (error) {
-      loggerService.error(`[抓取服务] 抓取失败: ${error.message}`);
-      console.error('❌ 抓取失败:', error);
-      throw new Error(`抓取CoinGlass数据失败: ${error.message}`);
-    } finally {
-      // 安全关闭页面
-      try {
-        if (page && !page.isClosed()) {
-          await page.close();
-        }
-      } catch (e) {
-        console.log('⚠️ 页面关闭时出现错误:', e.message);
-      }
+      console.error('❌ 抓取数据失败:', error);
+      return {
+        success: false,
+        error: error.message,
+        exchange: exchange,
+        coins: {}
+      };
     }
+  }
+
+  /**
+   * 抓取 CoinGlass 数据 - 支持多币种抓取（保持向后兼容）
+   */
+  async scrapeCoinGlassData(exchange = 'OKX', coin = 'USDT', timeframe = '1h', requestedCoins = null) {
+    // 直接调用新的会话支持方法，保持向后兼容
+    return await this.scrapeCoinGlassDataWithSession(exchange, coin, timeframe, requestedCoins);
   }
 
   /**
@@ -283,132 +267,420 @@ export class ScraperService {
    */
   async switchExchange(page, targetExchange) {
     try {
-      console.log(`🔄 开始切换到交易所: ${targetExchange}`);
+      console.log(`🔄 切换交易所: ${targetExchange}...`);
 
       // 等待页面加载完成
       await page.waitForSelector('[role="combobox"]', { timeout: 10000 });
 
-      // 多种方法尝试找到交易所选择器
+      // 使用更精确的交易所选择器定位策略
       const exchangeFound = await page.evaluate((targetExchange) => {
-        // 方法1：通过 role="combobox" 查找
-        const comboboxes = document.querySelectorAll('[role="combobox"]');
-        console.log(`找到 ${comboboxes.length} 个 combobox 元素`);
+        console.log(`🔍 开始定位交易所选择器，目标: ${targetExchange}`);
 
-        // 方法2：通过 class 名称查找交易所相关的下拉框
-        const exchangeSelectors = [
-          '[class*="exchange"]',
-          '[class*="Exchange"]',
-          '[data-testid*="exchange"]',
-          '[data-testid*="Exchange"]'
-        ];
+        // 策略1：查找 button[role="combobox"]（基于实际DOM结构）
+        const exchangeButtons = Array.from(document.querySelectorAll('button[role="combobox"]'));
+        console.log(`找到 ${exchangeButtons.length} 个 button[role="combobox"] 元素`);
+
+        // 策略2：查找带有 MuiSelect 相关类的元素
+        const selectElements = Array.from(document.querySelectorAll('[class*="MuiSelect"]'));
+        console.log(`找到 ${selectElements.length} 个 MuiSelect 相关元素`);
+
+        // 策略3：结合属性查找交易所选择器
+        const allComboboxes = Array.from(document.querySelectorAll('[role="combobox"]'));
+        console.log(`找到 ${allComboboxes.length} 个 combobox 元素`);
 
         let exchangeElement = null;
+        let elementType = '';
 
-        // 尝试从 combobox 中找到交易所选择器（通常是第二个）
-        if (comboboxes.length >= 2) {
-          exchangeElement = comboboxes[1];
-        } else {
-          // 尝试其他选择器
-          for (const selector of exchangeSelectors) {
-            const element = document.querySelector(selector);
-            if (element && (element.getAttribute('role') === 'combobox' || element.tagName === 'INPUT')) {
-              exchangeElement = element;
+        // 方法1：优先使用 button[role="combobox"]（最符合实际DOM）
+        if (exchangeButtons.length > 0) {
+          exchangeElement = exchangeButtons[0];
+          elementType = 'button[role="combobox"]';
+          console.log(`✅ 使用button选择器定位交易所`);
+        }
+        // 方法2：查找 MuiSelect 根元素
+        else if (selectElements.length > 0) {
+          // 查找可点击的选择器按钮
+          for (const selectEl of selectElements) {
+            const button = selectEl.querySelector('button') || selectEl;
+            if (button && button.getAttribute('role') === 'combobox') {
+              exchangeElement = button;
+              elementType = 'MuiSelect button';
+              console.log(`✅ 使用MuiSelect定位交易所`);
+              break;
+            }
+          }
+        }
+        // 方法3：从所有combobox中识别交易所选择器
+        else if (allComboboxes.length > 0) {
+          // 通过元素内容和属性识别交易所选择器
+          for (const combobox of allComboboxes) {
+            const text = combobox.textContent?.trim().toLowerCase() || '';
+            const value = combobox.value?.toLowerCase() || '';
+
+            // 排除币种选择器（通常包含币种符号）
+            const isCoinSelector = ['usdt', 'btc', 'eth', 'usdc'].some(coin =>
+              text.includes(coin) || value.includes(coin)
+            );
+
+            // 排除语言选择器
+            const isLanguageSelector = ['中文', 'english', '日本語'].some(lang =>
+              text.includes(lang) || value.includes(lang)
+            );
+
+            if (!isCoinSelector && !isLanguageSelector) {
+              exchangeElement = combobox;
+              elementType = 'filtered combobox';
+              console.log(`✅ 使用过滤的combobox定位交易所`);
               break;
             }
           }
         }
 
         if (!exchangeElement) {
-          console.error('未找到交易所选择器');
+          console.error('❌ 未找到交易所选择器');
+          console.log('调试信息:');
+          console.log(`- button[role="combobox"]: ${exchangeButtons.length}个`);
+          console.log(`- MuiSelect元素: ${selectElements.length}个`);
+          console.log(`- 总combobox: ${allComboboxes.length}个`);
           return false;
         }
+
+        console.log(`🎯 找到交易所选择器 (${elementType})，准备点击`);
+        console.log(`元素信息: tagName=${exchangeElement.tagName}, text="${exchangeElement.textContent?.trim()}", value="${exchangeElement.value || ''}"`);
 
         // 点击交易所选择器
         exchangeElement.click();
 
-        // 等待下拉选项出现
-        setTimeout(() => {
-          const options = Array.from(document.querySelectorAll('[role="option"]'));
-          console.log(`找到 ${options.length} 个选项`);
+        // 等待下拉选项出现并选择目标交易所
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            try {
+              const options = Array.from(document.querySelectorAll('[role="option"]'));
+              console.log(`找到 ${options.length} 个选项`);
 
-          // 查找目标交易所
-          const targetOption = options.find(option => {
-            const text = option.textContent.trim().toLowerCase();
-            return text === targetExchange.toLowerCase() ||
-                   text.includes(targetExchange.toLowerCase());
-          });
+              // 查找目标交易所
+              const targetOption = options.find(option => {
+                const text = option.textContent.trim().toLowerCase();
+                return text === targetExchange.toLowerCase() ||
+                       text.includes(targetExchange.toLowerCase()) ||
+                       targetExchange.toLowerCase().includes(text);
+              });
 
-          if (targetOption) {
-            console.log(`找到交易所选项: ${targetOption.textContent.trim()}`);
-            targetOption.click();
-            return true;
-          } else {
-            console.log(`未找到交易所选项: ${targetExchange}`);
-            console.log('可用选项:', options.map(opt => opt.textContent.trim()));
-            return false;
-          }
-        }, 1000);
-
-        return true;
+              if (targetOption) {
+                console.log(`✅ 找到交易所选项: "${targetOption.textContent.trim()}"`);
+                targetOption.click();
+                resolve(true);
+              } else {
+                console.log(`❌ 未找到交易所选项: ${targetExchange}`);
+                console.log('可用选项:', options.map(opt => `"${opt.textContent.trim()}"`));
+                resolve(false);
+              }
+            } catch (error) {
+              console.error('选择交易所选项时出错:', error);
+              resolve(false);
+            }
+          }, 1500); // 增加等待时间确保下拉选项完全加载
+        });
       }, targetExchange);
 
-      await page.waitForTimeout(this.config.waitTimes.exchange);
+      if (exchangeFound) {
+        await page.waitForTimeout(this.config.waitTimes.exchange);
+        console.log(`🔄 切换交易所: ${targetExchange} 成功`);
+      } else {
+        console.log(`⚠️ 切换交易所: ${targetExchange} 失败`);
+      }
 
-      // 验证切换是否成功
-      await page.waitForTimeout(this.config.waitTimes.verification);
-      console.log(`✅ 交易所切换操作完成: ${targetExchange}`);
+      return exchangeFound;
 
     } catch (error) {
       console.error('❌ 切换交易所失败:', error);
+      return false;
     }
   }
 
   /**
-   * 切换币种 - 多策略增强方法（基于测试成功的方案）
+   * 获取当前页面选中的交易所
+   */
+  async getCurrentExchange(page) {
+    try {
+      const currentExchange = await page.evaluate(() => {
+        // 定义需要排除的关键词（语言、地区等非交易所选项）
+        const excludeKeywords = [
+          '简体中文', '繁体中文', 'English', '日本語', '한국어',
+          '中文', '语言', 'Language', '地区', 'Region',
+          '简体', '繁体', '设置', 'Settings'
+        ];
+
+        // 定义有效的交易所关键词
+        const validExchangeKeywords = [
+          'binance', 'okx', 'bybit', 'huobi', 'kucoin', 'mexc',
+          'gate.io', 'bitget', 'crypto.com', 'coinbase', 'kraken',
+          'ftx', 'bitfinex', 'bittrex', 'poloniex'
+        ];
+
+        // 使用与switchExchange相同的定位策略查找交易所元素
+        const exchangeButtons = Array.from(document.querySelectorAll('button[role="combobox"]'));
+        const selectElements = Array.from(document.querySelectorAll('[class*="MuiSelect"]'));
+        const allComboboxes = Array.from(document.querySelectorAll('[role="combobox"]'));
+
+        let exchangeElement = null;
+        let bestMatch = null;
+
+        // 方法1：优先使用 button[role="combobox"]
+        if (exchangeButtons.length > 0) {
+          console.log(`找到 ${exchangeButtons.length} 个 button[role="combobox"] 元素`);
+
+          // 遍历所有按钮，寻找交易所选择器
+          for (const button of exchangeButtons) {
+            const buttonText = button.textContent?.trim() || '';
+            console.log(`检查按钮文本: "${buttonText}"`);
+
+            // 检查是否包含排除关键词
+            const isExcluded = excludeKeywords.some(keyword =>
+              buttonText.toLowerCase().includes(keyword.toLowerCase())
+            );
+
+            if (isExcluded) {
+              console.log(`跳过非交易所按钮: "${buttonText}"`);
+              continue;
+            }
+
+            // 检查是否包含有效交易所关键词
+            const isValidExchange = validExchangeKeywords.some(exchange =>
+              buttonText.toLowerCase().includes(exchange.toLowerCase())
+            );
+
+            if (isValidExchange) {
+              bestMatch = button;
+              console.log(`找到交易所按钮: "${buttonText}"`);
+              break;
+            }
+          }
+
+          exchangeElement = bestMatch;
+        }
+        // 方法2：查找 MuiSelect 根元素
+        else if (selectElements.length > 0) {
+          console.log(`找到 ${selectElements.length} 个 MuiSelect 元素`);
+
+          for (const selectEl of selectElements) {
+            const button = selectEl.querySelector('button') || selectEl;
+            if (button && button.getAttribute('role') === 'combobox') {
+              const buttonText = button.textContent?.trim() || '';
+              console.log(`检查MuiSelect按钮文本: "${buttonText}"`);
+
+              // 检查是否包含排除关键词
+              const isExcluded = excludeKeywords.some(keyword =>
+                buttonText.toLowerCase().includes(keyword.toLowerCase())
+              );
+
+              if (isExcluded) {
+                console.log(`跳过非交易所MuiSelect: "${buttonText}"`);
+                continue;
+              }
+
+              // 检查是否包含有效交易所关键词
+              const isValidExchange = validExchangeKeywords.some(exchange =>
+                buttonText.toLowerCase().includes(exchange.toLowerCase())
+              );
+
+              if (isValidExchange) {
+                bestMatch = button;
+                console.log(`找到交易所MuiSelect: "${buttonText}"`);
+                break;
+              }
+            }
+          }
+
+          exchangeElement = bestMatch;
+        }
+        // 方法3：从所有combobox中识别交易所选择器
+        else if (allComboboxes.length > 0) {
+          console.log(`找到 ${allComboboxes.length} 个 combobox 元素`);
+
+          for (const combobox of allComboboxes) {
+            const buttonText = combobox.textContent?.trim() || '';
+            console.log(`检查combobox文本: "${buttonText}"`);
+
+            // 检查是否包含排除关键词
+            const isExcluded = excludeKeywords.some(keyword =>
+              buttonText.toLowerCase().includes(keyword.toLowerCase())
+            );
+
+            if (isExcluded) {
+              console.log(`跳过非交易所combobox: "${buttonText}"`);
+              continue;
+            }
+
+            // 检查是否包含有效交易所关键词
+            const isValidExchange = validExchangeKeywords.some(exchange =>
+              buttonText.toLowerCase().includes(exchange.toLowerCase())
+            );
+
+            if (isValidExchange) {
+              bestMatch = combobox;
+              console.log(`找到交易所combobox: "${buttonText}"`);
+              break;
+            }
+          }
+
+          exchangeElement = bestMatch;
+        }
+
+        if (!exchangeElement) {
+          console.log('未找到有效的交易所选择器');
+          return null;
+        }
+
+        // 获取当前选中的交易所名称
+        const buttonText = exchangeElement.textContent?.trim();
+        console.log(`最终选择器文本: "${buttonText}"`);
+
+        if (buttonText) {
+          // 提取交易所名称（优先匹配已知交易所）
+          const exchangeMatch = buttonText.match(/(Binance|OKX|Bybit|Huobi|KuCoin|MEXC|Gate\.io|Bitget|Crypto\.com|Coinbase|Kraken|FTX|Bitfinex|Bittrex|Poloniex)/i);
+          if (exchangeMatch) {
+            const exchangeName = exchangeMatch[1].toLowerCase();
+            console.log(`提取到交易所名称: ${exchangeName}`);
+            return exchangeName;
+          }
+
+          // 如果没有匹配到已知交易所，检查是否包含有效关键词
+          const foundKeyword = validExchangeKeywords.find(exchange =>
+            buttonText.toLowerCase().includes(exchange.toLowerCase())
+          );
+
+          if (foundKeyword) {
+            console.log(`通过关键词识别交易所: ${foundKeyword}`);
+            return foundKeyword;
+          }
+        }
+
+        return null;
+      });
+
+      return currentExchange;
+    } catch (error) {
+      console.error('获取当前交易所失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 智能切换交易所（仅在需要时切换）
+   */
+  async switchExchangeIfNeeded(page, targetExchange) {
+    try {
+      // 首先等待页面完全加载并稳定
+      await this.waitForPageStability(page);
+
+      // 读取当前页面交易所状态
+      const currentExchange = await this.getCurrentExchange(page);
+
+      // 如果无法获取当前交易所，等待一下再试
+      if (currentExchange === null) {
+        console.log('⏳ 页面交易所状态未就绪，等待后重试...');
+        await page.waitForTimeout(2000);
+        const retryExchange = await this.getCurrentExchange(page);
+
+        if (retryExchange === null) {
+          console.log('⚠️ 无法获取当前交易所状态，强制执行切换');
+        } else {
+          console.log(`✅ 重新检测到当前交易所: ${retryExchange}`);
+        }
+      }
+
+      // 标准化交易所名称比较（忽略大小写）
+      const normalizedCurrent = currentExchange?.toLowerCase();
+      const normalizedTarget = targetExchange?.toLowerCase();
+
+      if (normalizedCurrent === normalizedTarget && currentExchange !== null) {
+        console.log(`📍 当前交易所已是 ${targetExchange}，跳过切换`);
+        return true;
+      }
+
+      console.log(`🔄 交易所需要切换: ${currentExchange || '未知'} -> ${targetExchange}`);
+
+      // 执行实际切换
+      const success = await this.switchExchange(page, targetExchange);
+
+      if (success) {
+        // 切换后等待页面稳定
+        await page.waitForTimeout(this.config.waitTimes.exchange);
+
+        // 验证切换结果
+        const verifyExchange = await this.getCurrentExchange(page);
+        const normalizedVerify = verifyExchange?.toLowerCase();
+
+        if (normalizedVerify === normalizedTarget) {
+          console.log(`✅ 交易所切换成功: ${targetExchange}`);
+        } else {
+          console.log(`⚠️ 交易所切换验证失败: 期望 ${targetExchange}，实际 ${verifyExchange || '未知'}`);
+        }
+      } else {
+        console.log(`❌ 交易所切换失败: ${targetExchange}`);
+      }
+
+      return success;
+
+    } catch (error) {
+      console.error('❌ 智能交易所切换失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 等待页面完全加载并稳定
+   */
+  async waitForPageStability(page) {
+    try {
+      // 等待主要的DOM元素加载完成
+      await page.waitForSelector('[role="combobox"]', { timeout: 10000 }).catch(() => {
+        console.log('⚠️ 未找到combobox元素，继续执行...');
+      });
+
+      // 等待页面JavaScript执行完成
+      await page.waitForFunction(() => {
+        return document.readyState === 'complete' &&
+               window.performance.timing.loadEventEnd > 0;
+      }, { timeout: 15000 }).catch(() => {
+        console.log('⚠️ 页面加载超时，继续执行...');
+      });
+
+      // 额外等待确保动态内容加载完成
+      await page.waitForTimeout(1000);
+
+      console.log('✅ 页面状态稳定');
+    } catch (error) {
+      console.warn('⚠️ 页面稳定性检测失败:', error.message);
+    }
+  }
+
+  /**
+   * 切换币种 - Chrome DevTools验证方案
    */
   async switchCoin(page, coin) {
     try {
-      console.log(`🔄 开始多策略切换币种到: ${coin}`);
+      console.log(`🔄 切换币种: ${coin}...`);
 
-      // 尝试多种切换方法，按成功率排序
-      const methods = [
-        { name: '方法1-精确定位', method: this.switchCoinMethod1.bind(this), enabled: true },
-        { name: '方法3-键盘导航', method: this.switchCoinMethod3.bind(this), enabled: true },
-        { name: '原方法-fallback', method: this.switchCoinOriginal.bind(this), enabled: true }
-      ];
+      // 使用Chrome DevTools验证的切换方案
+      const success = await this.switchCoinMethod(page, coin);
 
-      for (const methodConfig of methods) {
-        if (!methodConfig.enabled) continue;
+      if (success) {
+        console.log(`🔄 切换币种: ${coin} 成功`);
 
-        console.log(`🎯 尝试${methodConfig.name}切换币种: ${coin}`);
-
-        try {
-          const success = await methodConfig.method(page, coin);
-
-          if (success) {
-            console.log(`✅ ${methodConfig.name}币种切换成功: ${coin}`);
-
-            // 验证切换结果
-            const verification = await this.verifyCoinSwitch(page, coin);
-            if (verification.success) {
-              console.log(`✅ ${methodConfig.name}币种切换验证成功: ${coin}`);
-              return true;
-            } else {
-              console.warn(`⚠️ ${methodConfig.name}币种切换验证失败: ${verification.reason}`);
-            }
-          } else {
-            console.log(`❌ ${methodConfig.name}币种切换失败: ${coin}`);
-          }
-        } catch (error) {
-          console.error(`❌ ${methodConfig.name}执行失败:`, error.message);
+        // 验证切换结果
+        const verification = await this.verifyCoinSwitch(page, coin);
+        if (verification.success) {
+          return true;
+        } else {
+          console.warn(`⚠️ 币种切换验证失败: ${verification.reason}`);
+          return false;
         }
-
-        // 在尝试下一个方法前等待页面稳定
-        await page.waitForTimeout(this.config.waitTimes.method);
+      } else {
+        console.log(`❌ 切换币种: ${coin} 失败`);
+        return false;
       }
-
-      console.error(`❌ 所有方法都无法成功切换币种: ${coin}`);
-      return false;
 
     } catch (error) {
       console.error(`❌ 切换币种过程中发生错误: ${coin}`, error);
@@ -416,70 +688,17 @@ export class ScraperService {
     }
   }
 
+  
   /**
-   * 方法1: 精确定位币种选择器（基于页面结构分析）
+   * 币种切换：Chrome DevTools验证方案
+   * 流程：聚焦输入框 -> 按下箭头键触发下拉 -> 输入币种 -> 点击选项 -> 等待页面更新
    */
-  async switchCoinMethod1(page, coin) {
+  async switchCoinMethod(page, coin) {
     try {
-      // 使用更精确的选择器来定位币种输入框
-      const coinSelectors = [
-        'input[role="combobox"][value*="USDT"], input[role="combobox"][value*="BTC"], input[role="combobox"][value*="ETH"]',
-        'input[autocomplete="list"]:not([placeholder*="搜索"])',
-        '.css-1hwfws3' // CoinGlass 币种选择器的常见 class
-      ];
-
-      for (const selector of coinSelectors) {
-        try {
-          const input = await page.$(selector);
-          if (input) {
-            console.log(`📍 找到币种输入框: ${selector}`);
-            await input.click();
-            await page.waitForTimeout(this.config.waitTimes.retry);
-
-            // 增强版清除逻辑
-            await this.performEnhancedClear(page);
-
-            // 输入币种
-            await page.keyboard.type(coin);
-            await page.waitForTimeout(this.config.waitTimes.method);
-
-            // 查找并点击选项
-            const optionClicked = await page.evaluate((targetCoin) => {
-              const options = Array.from(document.querySelectorAll('[role="option"]'));
-              const target = options.find(opt =>
-                opt.textContent.trim().toUpperCase() === targetCoin.toUpperCase()
-              );
-              if (target) {
-                target.click();
-                return true;
-              }
-              return false;
-            }, coin);
-
-            if (optionClicked) {
-              await page.waitForTimeout(this.config.waitTimes.verification);
-              return true;
-            }
-          }
-        } catch (e) {
-          // 继续尝试下一个选择器
-        }
-      }
-      return false;
-    } catch (error) {
-      console.error('方法1失败:', error.message);
-      return false;
-    }
-  }
-
-  /**
-   * 方法3: 智能键盘导航 + 元素预选择
-   */
-  async switchCoinMethod3(page, coin) {
-    try {
-      // 先定位到合适的输入框，然后使用键盘操作
-      const success = await page.evaluate((targetCoin) => {
-        // 查找最适合键盘操作的币种输入框
+    
+      // 步骤1：定位并聚焦币种输入框
+      const inputFound = await page.evaluate(() => {
+        // 查找最适合的币种输入框
         const inputs = Array.from(document.querySelectorAll('input[role="combobox"]'));
 
         // 筛选出币种输入框（排除语言选择器）
@@ -495,154 +714,117 @@ export class ScraperService {
           // 选择有 autocomplete 属性或包含币种值的输入框
           return !isLanguageSelector && !isSearchBox &&
                  (input.hasAttribute('autocomplete') ||
-                  ['BTC', 'ETH', 'USDT'].some(coin => value.toUpperCase().includes(coin)));
+                  value.length > 0 && !['简体中文', 'English', '繁體中文', '日本語'].some(lang =>
+                    value.includes(lang)
+                  ));
         });
 
         if (coinInputs.length > 0) {
           const targetInput = coinInputs[0];
-
-          // 聚焦到目标输入框
+          // 聚焦并点击输入框
           targetInput.focus();
           targetInput.click();
-
-          // 清空输入 - 增强版清除逻辑
-          targetInput.focus();
-          targetInput.select();
-          targetInput.value = '';
-          targetInput.select(); // 再次选中确保清空
-
-          return true; // 返回成功，后续操作在外部进行
-        }
-
-        return false;
-      }, coin);
-
-      if (success) {
-        await page.waitForTimeout(this.config.waitTimes.retry);
-
-        // 使用键盘输入币种
-        await page.keyboard.type(coin);
-        await page.waitForTimeout(this.config.waitTimes.method);
-
-        // 查找并选择选项
-        const optionSelected = await page.evaluate((targetCoin) => {
-          const options = Array.from(document.querySelectorAll('[role="option"]'));
-          const target = options.find(opt =>
-            opt.textContent.trim().toUpperCase() === targetCoin.toUpperCase()
-          );
-
-          if (target) {
-            target.click();
-            return true;
-          }
-
-          // 如果没找到精确匹配，尝试使用键盘选择第一个选项
-          if (options.length > 0) {
-            // 模拟向下箭头选择
-            document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {
-              key: 'ArrowDown',
-              code: 'ArrowDown',
-              keyCode: 40,
-              bubbles: true
-            }));
-
-            // 模拟回车确认
-            document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {
-              key: 'Enter',
-              code: 'Enter',
-              keyCode: 13,
-              bubbles: true
-            }));
-
-            return true;
-          }
-
-          return false;
-        }, coin);
-
-        if (optionSelected) {
-          await page.waitForTimeout(this.config.waitTimes.optionSelect);
           return true;
         }
+        return false;
+      });
+
+      if (!inputFound) {
+        console.log('❌ 未找到币种输入框');
+        return false;
       }
 
-      return false;
-    } catch (error) {
-      console.error('方法3失败:', error.message);
-      return false;
-    }
-  }
+      await page.waitForTimeout(this.config.waitTimes.retry);
 
-  /**
-   * 原方法 - 作为fallback保留
-   */
-  async switchCoinOriginal(page, coin) {
-    try {
-      console.log(`🔄 使用原方法切换币种到: ${coin}`);
+      // 步骤2：按下箭头键触发下拉选项列表展开
+      await page.evaluate(() => {
+        const activeElement = document.activeElement;
+        if (activeElement) {
+          activeElement.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'ArrowDown',
+            code: 'ArrowDown',
+            bubbles: true
+          }));
+        }
+      });
 
-      // 等待并点击币种输入框
-      const coinInput = await page.waitForSelector('input[role="combobox"]', { timeout: 10000 });
-      await coinInput.click();
-      await coinInput.focus();
+      await page.waitForTimeout(200);
 
-      // 清空并输入币种名称
-      await page.keyboard.down('Control');
-      await page.keyboard.press('a');
-      await page.keyboard.up('Control');
-      await page.keyboard.type(coin);
+      // 步骤3：清空并输入目标币种
+      await page.evaluate((targetCoin) => {
+        const activeElement = document.activeElement;
+        if (activeElement && activeElement.role === 'combobox') {
+          // 完全清空输入框
+          activeElement.value = '';
+          activeElement.focus();
+          activeElement.select();
+          activeElement.value = '';
 
-      // 等待选项加载
-      await page.waitForTimeout(this.config.waitTimes.method);
+          // 输入目标币种
+          activeElement.value = targetCoin;
 
-      // 查找并点击目标币种选项
+          // 触发输入事件
+          activeElement.dispatchEvent(new Event('input', { bubbles: true }));
+          activeElement.dispatchEvent(new Event('change', { bubbles: true }));
+
+          console.log(`✅ 已输入币种: "${targetCoin}"`);
+        }
+      }, coin);
+
+      await page.waitForTimeout(500);
+
+      // 步骤4：查找并点击目标币种选项
       const optionClicked = await page.evaluate((targetCoin) => {
         const options = Array.from(document.querySelectorAll('[role="option"]'));
+        console.log(`📋 找到 ${options.length} 个选项，查找目标: ${targetCoin}`);
 
-        // 查找匹配的选项
+        // 查找精确匹配的选项
         const targetOption = options.find(option => {
           const text = option.textContent.trim();
-          return text === targetCoin ||
-                 text === `${targetCoin}永续` ||
-                 text.includes(targetCoin);
+          return text === targetCoin;
         });
 
         if (targetOption) {
+          console.log(`✅ 找到精确匹配选项: "${targetOption.textContent.trim()}"`);
           targetOption.click();
+          targetOption.dispatchEvent(new MouseEvent('click', { bubbles: true }));
           return true;
+        } else {
+          // 如果没有精确匹配，尝试部分匹配
+          const partialOption = options.find(option => {
+            const text = option.textContent.trim().toUpperCase();
+            return text.includes(targetCoin.toUpperCase());
+          });
+
+          if (partialOption) {
+            console.log(`✅ 找到部分匹配选项: "${partialOption.textContent.trim()}"`);
+            partialOption.click();
+            partialOption.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            return true;
+          }
+
+          console.log(`❌ 未找到币种选项: ${targetCoin}`);
+          console.log(`可用选项: ${options.map(opt => `"${opt.textContent.trim()}"`).slice(0, 10).join(', ')}`);
+          return false;
         }
-        return false;
       }, coin);
 
       if (!optionClicked) {
-        throw new Error(`未找到币种选项: ${coin}`);
+        console.log(`❌ 未找到币种选项，可能是交易所不支持或币种名称不匹配`);
+        return false;
       }
 
-      // 等待页面更新
+      // 步骤5：等待页面更新完成
       await page.waitForTimeout(this.config.waitTimes.verification);
 
       return true;
 
     } catch (error) {
-      console.error(`❌ 原方法切换币种失败: ${coin}`, error);
+      console.error(`❌ Chrome DevTools方案币种切换失败: ${coin}`, error.message);
       return false;
     }
   }
 
-  /**
-   * 增强版清除逻辑
-   */
-  async performEnhancedClear(page) {
-    await page.evaluate(() => {
-      document.activeElement.select();
-      document.activeElement.value = '';
-    });
-    await page.keyboard.down('Control');
-    await page.keyboard.press('a');
-    await page.keyboard.up('Control');
-    await page.keyboard.press('Backspace');
-    await page.keyboard.press('Delete');
-    await page.waitForTimeout(this.config.waitTimes.clear);
-  }
 
   /**
    * 验证币种切换结果
@@ -753,31 +935,77 @@ export class ScraperService {
         // 如果还是unknown，从body文本推断
         if (currentExchange === 'unknown' || currentCoin === 'unknown') {
           const bodyText = document.body.textContent.toLowerCase();
-          if (bodyText.includes('okx')) currentExchange = 'okx';
-          else if (bodyText.includes('bybit')) currentExchange = 'bybit';
-          else if (bodyText.includes('binance')) currentExchange = 'binance';
+          if (bodyText.includes('okx')) currentExchange = 'okx';  // 统一使用小写
+          else if (bodyText.includes('bybit')) currentExchange = 'bybit';  // 统一使用小写
+          else if (bodyText.includes('binance')) currentExchange = 'binance';  // 统一使用小写
 
-          if (bodyText.includes('btc')) currentCoin = 'BTC';
-          else if (bodyText.includes('eth')) currentCoin = 'ETH';
-          else if (bodyText.includes('usdt')) currentCoin = 'USDT';
-        }
-
-        // 检查页面上的选择器当前值
-        const comboboxes = document.querySelectorAll('[role="combobox"]');
-        if (comboboxes.length >= 2) {
-          const exchangeCombobox = comboboxes[1];
-          const exchangeValue = exchangeCombobox.textContent || exchangeCombobox.value;
-          if (exchangeValue && exchangeValue.toLowerCase().includes(expectedExchange.toLowerCase())) {
-            currentExchange = expectedExchange.toLowerCase();
+          // 尝试从页面文本中提取币种符号（更通用的方法）
+          const coinMatches = bodyText.match(/\b[A-Z]{2,10}\b/g);
+          if (coinMatches && coinMatches.length > 0) {
+            // 优先选择常见的币种符号
+            const commonCoins = coinMatches.filter(coin =>
+              coin.length >= 2 && coin.length <= 10 && /^[A-Z]+$/.test(coin)
+            );
+            if (commonCoins.length > 0) {
+              currentCoin = commonCoins[0];
+            }
           }
         }
 
-        if (comboboxes.length >= 3) {
-          const coinCombobox = comboboxes[2];
-          const coinValue = coinCombobox.textContent || coinCombobox.value;
-          if (coinValue && (coinValue.toUpperCase().includes(expectedCoin.toUpperCase()) ||
-                           coinValue.includes('USD') && expectedCoin === 'USDT')) {
-            currentCoin = expectedCoin.toUpperCase();
+        // 检查页面上的选择器当前值 - 使用智能识别而非索引假设
+        const allComboboxes = document.querySelectorAll('[role="combobox"]');
+        console.log(`🔍 验证时找到 ${allComboboxes.length} 个 combobox 元素`);
+
+        // 智能识别交易所选择器
+        for (let i = 0; i < allComboboxes.length; i++) {
+          const element = allComboboxes[i];
+          const text = (element.textContent || '').trim().toLowerCase();
+          const value = (element.value || '').toLowerCase();
+
+          // 排除币种选择器
+          const isCoinSelector = ['usdt', 'btc', 'eth', 'usdc'].some(coin =>
+            text.includes(coin) || value.includes(coin)
+          );
+
+          // 排除语言选择器
+          const isLanguageSelector = ['中文', 'english', '日本語'].some(lang =>
+            text.includes(lang) || value.includes(lang)
+          );
+
+          // 如果不是币种或语言选择器，可能是交易所选择器
+          if (!isCoinSelector && !isLanguageSelector) {
+            const elementValue = element.textContent || element.value;
+            if (elementValue && elementValue.toLowerCase().includes(expectedExchange.toLowerCase())) {
+              currentExchange = expectedExchange.toLowerCase();  // 统一使用小写
+              console.log(`✅ 通过combobox验证交易所: ${elementValue} -> ${expectedExchange}`);
+              break;
+            }
+          }
+        }
+
+        // 智能识别币种选择器
+        for (let i = 0; i < allComboboxes.length; i++) {
+          const element = allComboboxes[i];
+          const text = (element.textContent || '').trim().toLowerCase();
+          const value = (element.value || '').toLowerCase();
+
+          // 排除语言选择器
+          const isLanguageSelector = ['中文', 'english', '日本語'].some(lang =>
+            text.includes(lang) || value.includes(lang)
+          );
+
+          // 查找包含目标币种或币种相关值的元素
+          if (!isLanguageSelector) {
+            const elementValue = element.textContent || element.value;
+            if (elementValue && (
+              elementValue.toUpperCase().includes(expectedCoin.toUpperCase()) ||
+              elementValue.includes(expectedCoin) ||
+              expectedCoin.toUpperCase().includes(elementValue.toUpperCase())
+            )) {
+              currentCoin = expectedCoin.toUpperCase();
+              console.log(`✅ 通过combobox验证币种: ${elementValue} -> ${expectedCoin}`);
+              break;
+            }
           }
         }
 
@@ -785,8 +1013,8 @@ export class ScraperService {
         const availableCoins = Array.from(document.querySelectorAll('[role="option"]'))
           .map(option => {
             const text = option.textContent.trim();
-            const coinMatch = text.match(/^(BTC|ETH|USDT|USDC|BNB|SOL|ADA|DOT|AVAX|MATIC|LINK|UNI|ATOM|FTM)/);
-            return coinMatch ? coinMatch[1] : null;
+            const coinMatch = text.match(/^[A-Z0-9]{2,20}/);
+            return coinMatch ? coinMatch[0] : null;
           })
           .filter(coin => coin)
           .filter((coin, index, arr) => arr.indexOf(coin) === index); // 去重
@@ -834,7 +1062,7 @@ export class ScraperService {
    */
   async switchTimeframe(page, timeframe) {
     try {
-      console.log(`🔄 开始切换时间框架到: ${timeframe}`);
+      console.log(`🔄 切换时间框架: ${timeframe}...`);
 
       // 查找时间框架标签页
       const success = await page.evaluate((targetTimeframe) => {
@@ -874,7 +1102,7 @@ export class ScraperService {
       await page.waitForTimeout(this.config.waitTimes.verification);
 
       if (success) {
-        console.log(`✅ 成功切换到时间框架: ${timeframe}`);
+        console.log(`🔄 切换时间框架: ${timeframe} 成功`);
       } else {
         console.log(`⚠️ 未找到时间框架选项: ${timeframe}，将使用默认时间框架`);
         // 不抛出错误，允许继续使用默认时间框架
@@ -891,8 +1119,7 @@ export class ScraperService {
   async extractTableData(page, exchange, coin) {
     try {
       console.log(`📊 提取数据，预期交易所: ${exchange}, 主要币种: ${coin}`);
-      console.log(`📸 截图已在数据采集前完成，现在开始提取数据`);
-
+      
       const data = await page.evaluate((expectedExchange, expectedCoin) => {
         // 获取页面标题和当前配置
         const pageTitle = document.title;
@@ -1005,14 +1232,26 @@ export class ScraperService {
           throw new Error(`无法获取 ${expectedCoin} 的真实利率数据，请检查 CoinGlass 网站访问状态`);
         }
 
+        // 统一的交易所名称格式化函数：小写转标准大写
+        const formatExchangeName = (exchange) => {
+          const normalizedExchange = exchange.toLowerCase();
+          switch (normalizedExchange) {
+            case 'binance': return 'Binance';
+            case 'okx': return 'OKX';
+            case 'bybit': return 'Bybit';
+            default: return exchange;
+          }
+        };
+
+        const formattedExchange = formatExchangeName(currentExchange);
         return {
-          exchange: currentExchange.toLowerCase(),
+          exchange: formattedExchange,
           timestamp: new Date().toISOString(),
           coins: allCoinsData,
           source: 'coinglass_real_data',
           extraction_info: {
             page_title: pageTitle,
-            current_exchange: currentExchange,
+            current_exchange: formattedExchange,
             current_coin: currentCoin,
             data_points_extracted: Object.keys(allCoinsData).length,
             extraction_timestamp: new Date().toISOString()
@@ -1032,9 +1271,7 @@ export class ScraperService {
         const coin = data.coins[coinKey];
         console.log(`  - ${coinKey}: ${coin.annual_rate}% (${coin.history?.length || 0} 个历史数据点)`);
       });
-      console.log(`📋 数据来源: ${data.source}`);
-      console.log(`📋 提取信息:`, data.extraction_info);
-
+      
       return data;
 
     } catch (error) {

@@ -135,6 +135,142 @@ class ConfigManager {
         this.apiBase = window.location.origin;
     }
 
+    // 切换分组菜单显示
+    toggleGroupMenu(groupId) {
+        // 关闭所有其他菜单
+        const allMenus = document.querySelectorAll('.more-dropdown');
+        allMenus.forEach(menu => {
+            if (menu.id !== `groupMenu_${groupId}`) {
+                menu.classList.remove('show');
+            }
+        });
+
+        // 切换当前菜单
+        const currentMenu = document.getElementById(`groupMenu_${groupId}`);
+        if (currentMenu) {
+            currentMenu.classList.toggle('show');
+        }
+    }
+
+    // 切换分组启用状态
+    toggleGroupStatus(groupId) {
+        const groups = window.appState.currentConfig?.email_groups || [];
+        const group = groups.find(g => g.id === groupId);
+
+        if (!group) {
+            return;
+        }
+
+        const newStatus = !(group.enabled !== false);
+
+        // 关闭菜单
+        const menu = document.getElementById(`groupMenu_${groupId}`);
+        if (menu) {
+            menu.classList.remove('show');
+        }
+
+        // 调用现有的状态切换方法
+        this.handleGroupToggleChange(groupId, newStatus);
+    }
+
+    // 重命名分组
+    renameGroup(groupId) {
+        const groups = window.appState.currentConfig?.email_groups || [];
+        const group = groups.find(g => g.id === groupId);
+
+        if (!group) {
+            window.appUtils?.showAlert?.('分组信息不存在', 'error');
+            return;
+        }
+
+        // 关闭菜单
+        const menu = document.getElementById(`groupMenu_${groupId}`);
+        if (menu) {
+            menu.classList.remove('show');
+        }
+
+        // 创建重命名对话框
+        const dialog = document.createElement('div');
+        dialog.className = 'dialog-overlay';
+        dialog.innerHTML = `
+            <div class="dialog">
+                <div class="dialog-header">
+                    <h3>重命名邮件分组</h3>
+                    <button onclick="window.appConfig.closeDialog()" class="close-btn">&times;</button>
+                </div>
+                <div class="dialog-content">
+                    <div class="form-group">
+                        <label>分组名称:</label>
+                        <input type="text" id="groupName" value="${group.name}" placeholder="请输入分组名称" maxlength="20">
+                        <small style="color: #6b7280; font-size: 12px; margin-top: 4px; display: block;">
+                            分组名称不能重复，1-20个字符
+                        </small>
+                    </div>
+                </div>
+                <div class="dialog-actions">
+                    <button onclick="window.appConfig.closeDialog()" class="btn-secondary">取消</button>
+                    <button onclick="window.appConfig.saveGroupName('${groupId}')" class="btn-primary">保存</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(dialog);
+
+        // 自动选中输入框内容
+        setTimeout(() => {
+            const input = document.getElementById('groupName');
+            if (input) {
+                input.focus();
+                input.select();
+            }
+        }, 100);
+    }
+
+    // 保存分组名称
+    async saveGroupName(groupId) {
+        const groups = window.appState.currentConfig?.email_groups || [];
+        const group = groups.find(g => g.id === groupId);
+
+        if (!group) {
+            window.appUtils?.showAlert?.('分组信息不存在', 'error');
+            return;
+        }
+
+        const newName = document.getElementById('groupName').value.trim();
+
+        // 验证
+        if (!newName) {
+            window.appUtils?.showAlert?.('分组名称不能为空', 'error');
+            return;
+        }
+
+        if (newName.length > 20) {
+            window.appUtils?.showAlert?.('分组名称不能超过20个字符', 'error');
+            return;
+        }
+
+        // 检查重名
+        const duplicateGroup = groups.find(g => g.id !== groupId && g.name === newName);
+        if (duplicateGroup) {
+            window.appUtils?.showAlert?.('组名已存在，请更换', 'error');
+            return;
+        }
+
+        const oldName = group.name;
+        group.name = newName;
+
+        try {
+            await this.saveConfig();
+            await this.renderEmailGroups();
+            this.closeDialog();
+            window.appUtils?.showAlert?.(`分组名称已更新：${oldName} → ${newName}`, 'success');
+        } catch (error) {
+            // 回滚
+            group.name = oldName;
+            window.appUtils?.showAlert?.('保存失败，请重试', 'error');
+        }
+    }
+
     // 加载配置
     async loadConfig() {
         try {
@@ -149,12 +285,15 @@ class ConfigManager {
             const config = await response.json();
 
             if (config && Object.keys(config).length > 0) {
+                // 标准化配置中的交易所名称（自动修复历史数据）
+                this.normalizeConfigExchanges(config);
+
                 window.appState.currentConfig = config;
 
                 // 检查并处理无效邮箱的邮件组
                 await this.validateAndHandleInvalidEmails(config);
 
-                this.populateForm(config);
+                await this.populateForm(config);
                 return config;
             }
             return null;
@@ -166,7 +305,7 @@ class ConfigManager {
     }
 
     // 填充表单
-    populateForm(config) {
+    async populateForm(config) {
 
         // 移除邮箱配置，现在在邮件分组中设置
         document.getElementById('repeatInterval').value = config.repeat_interval || 180;
@@ -189,7 +328,74 @@ class ConfigManager {
         // 移除全局监控开关状态更新
 
         // 渲染邮件分组
-        this.renderEmailGroups();
+        await this.renderEmailGroups();
+    }
+
+    // 标准化交易所名称
+    normalizeExchangeName(exchange) {
+        if (!exchange || typeof exchange !== 'string') {
+            return exchange;
+        }
+
+        const normalized = exchange.toLowerCase();
+        switch (normalized) {
+            case 'binance': return 'Binance';
+            case 'okx': return 'OKX';
+            case 'bybit': return 'Bybit';
+            case 'huobi': return 'Huobi';
+            case 'kucoin': return 'KuCoin';
+            case 'mexc': return 'MEXC';
+            case 'gate.io':
+            case 'gate':
+                return 'Gate.io';
+            case 'bitget': return 'Bitget';
+            case 'crypto.com':
+            case 'crypto':
+                return 'Crypto.com';
+            case 'coinbase': return 'Coinbase';
+            case 'kraken': return 'Kraken';
+            case 'ftx': return 'FTX';
+            case 'bitfinex': return 'Bitfinex';
+            case 'bittrex': return 'Bittrex';
+            case 'poloniex': return 'Poloniex';
+            default:
+                // 对于未知交易所，首字母大写其余小写
+                return exchange.charAt(0).toUpperCase() + exchange.slice(1).toLowerCase();
+        }
+    }
+
+    // 标准化配置中的所有交易所名称
+    normalizeConfigExchanges(config) {
+        if (!config) return config;
+
+        // 标准化过滤器中的交易所
+        if (config.filters && config.filters.exchange) {
+            config.filters.exchange = this.normalizeExchangeName(config.filters.exchange);
+        }
+
+        // 标准化币种列表中的交易所
+        if (config.coins && Array.isArray(config.coins)) {
+            config.coins.forEach(coin => {
+                if (coin.exchange) {
+                    coin.exchange = this.normalizeExchangeName(coin.exchange);
+                }
+            });
+        }
+
+        // 标准化邮件分组中的交易所
+        if (config.email_groups && Array.isArray(config.email_groups)) {
+            config.email_groups.forEach(group => {
+                if (group.coins && Array.isArray(group.coins)) {
+                    group.coins.forEach(coin => {
+                        if (coin.exchange) {
+                            coin.exchange = this.normalizeExchangeName(coin.exchange);
+                        }
+                    });
+                }
+            });
+        }
+
+        return config;
     }
 
     // 保存配置
@@ -218,6 +424,9 @@ class ConfigManager {
                 end: endTime
             }
         };
+
+        // 标准化配置中的交易所名称
+        this.normalizeConfigExchanges(config);
 
         try {
             const response = await fetch(`${this.apiBase}/api/config`, {
@@ -327,6 +536,9 @@ class ConfigManager {
             },
             notification_hours: timeValidation.data // 使用验证后的数据
         };
+
+        // 标准化配置中的交易所名称
+        this.normalizeConfigExchanges(config);
 
         // 检查配置是否真的发生了变化
         if (!this.hasConfigChanged(config)) {
@@ -591,17 +803,43 @@ class ConfigManager {
             toggleSwitch.checked = enabled;
         }
 
-        // 更新状态文本
-        const statusText = document.querySelector(`[data-group-id="${groupId}"] .group-status-text`);
-        if (statusText) {
-            statusText.textContent = enabled ? '已启用' : '已禁用';
-            statusText.style.color = enabled ? '#059669' : '#6b7280';
+        // 更新状态徽章
+        const statusBadge = document.querySelector(`[data-group-id="${groupId}"] .group-status-badge`);
+        if (statusBadge) {
+            statusBadge.textContent = enabled ? '已启用' : '已禁用';
+            statusBadge.className = `group-status-badge ${enabled ? 'enabled' : 'disabled'}`;
         }
 
         // 更新邮箱输入框
         const emailInput = document.querySelector(`input[onchange*="updateGroupEmail('${groupId}'"]`);
         if (emailInput) {
             emailInput.value = email || '';
+        }
+    }
+
+    // 只更新邮箱相关的UI，不影响其他表单元素（避免交易所选项重置）
+    updateGroupEmailUI(groupId, email, isValid, isEnabled) {
+        // 更新开关状态
+        const toggleSwitch = document.getElementById(`groupToggle_${groupId}`);
+        if (toggleSwitch) {
+            toggleSwitch.checked = isEnabled;
+        }
+
+        // 更新状态徽章
+        const statusBadge = document.querySelector(`[data-group-id="${groupId}"] .group-status-badge`);
+        if (statusBadge) {
+            statusBadge.textContent = isEnabled ? '已启用' : '已禁用';
+            statusBadge.className = `group-status-badge ${isEnabled ? 'enabled' : 'disabled'}`;
+        }
+
+        // 更新邮箱输入框样式（根据验证结果）
+        const inputElement = document.querySelector(`input[onchange*="updateGroupEmail('${groupId}'"]`);
+        if (inputElement) {
+            if (email && !isValid) {
+                inputElement.classList.add('email-input-error');
+            } else {
+                inputElement.classList.remove('email-input-error');
+            }
         }
     }
 
@@ -877,20 +1115,31 @@ class ConfigManager {
                 console.log(`邮件组禁用 - 组ID: ${groupId}`);
             }
 
-            // 更新状态文本显示
-            const statusText = document.querySelector(`[data-group-id="${groupId}"] .group-status-text`);
-            if (statusText) {
-                statusText.textContent = isEnabled ? '已启用' : '已禁用';
-                statusText.style.color = isEnabled ? '#059669' : '#6b7280';
+          // 更新状态徽章显示
+            const statusBadge = document.querySelector(`[data-group-id="${groupId}"] .group-status-badge`);
+            if (statusBadge) {
+                statusBadge.textContent = isEnabled ? '已启用' : '已禁用';
+                statusBadge.className = `group-status-badge ${isEnabled ? 'enabled' : 'disabled'}`;
             }
+
+            // 更新菜单按钮文字
+            this.updateGroupMenuButton(groupId, isEnabled);
 
             // 自动保存配置
             this.autoSaveConfig();
         }
     }
 
+    // 更新分组菜单按钮文字
+    updateGroupMenuButton(groupId, isEnabled) {
+        const menuButton = document.querySelector(`#groupMenu_${groupId} button[onclick*="toggleGroupStatus('${groupId}')"]`);
+        if (menuButton) {
+            menuButton.textContent = isEnabled ? '禁用' : '启用';
+        }
+    }
+
     // 渲染邮件分组
-    renderEmailGroups() {
+    async renderEmailGroups() {
         const container = document.getElementById('emailGroups');
         const groups = window.appState.currentConfig?.email_groups || [];
 
@@ -899,23 +1148,41 @@ class ConfigManager {
             return;
         }
 
+        // 获取监控状态数据
+        let monitoringStatus = null;
+        try {
+            const response = await fetch(`${window.location.origin}/api/status`);
+            if (response.ok) {
+                const data = await response.json();
+                monitoringStatus = data.monitoring_status?.coins_state || {};
+            }
+        } catch (error) {
+            console.warn('获取监控状态失败:', error);
+        }
+
         container.innerHTML = groups.map((group, index) => `
             <div class="email-group" data-group-id="${group.id}">
                 <div class="group-header">
                     <div class="group-title-section">
                         <h3>${group.name}</h3>
-                        <label class="toggle-switch" style="transform: scale(0.8); margin-left: 10px;">
-                            <input type="checkbox"
-                                   id="groupToggle_${group.id}"
-                                   ${group.enabled !== false ? 'checked' : ''}
-                                   onchange="window.appConfig.handleGroupToggleChange('${group.id}', this.checked)">
-                            <span class="slider"></span>
-                        </label>
-                        <span class="group-status-text" style="margin-left: 8px; font-size: 12px; color: ${group.enabled !== false ? '#059669' : '#6b7280'};">
+                    </div>
+                    <div class="group-right-section">
+                        <span class="group-status-badge ${group.enabled !== false ? 'enabled' : 'disabled'}"
+                              onclick="window.appConfig.toggleGroupStatus('${group.id}')"
+                              style="cursor: pointer;">
                             ${group.enabled !== false ? '已启用' : '已禁用'}
                         </span>
+                        <div class="more-menu">
+                            <button onclick="window.appConfig.toggleGroupMenu('${group.id}')" class="more-btn-small">⋮</button>
+                            <div id="groupMenu_${group.id}" class="more-dropdown more-dropdown-small">
+                                <button onclick="window.appConfig.toggleGroupStatus('${group.id}')" class="more-dropdown-item">
+                                    ${group.enabled !== false ? '禁用' : '启用'}
+                                </button>
+                                <button onclick="window.appConfig.renameGroup('${group.id}')" class="more-dropdown-item">重命名</button>
+                                <button onclick="window.appConfig.deleteEmailGroup('${group.id}')" class="more-dropdown-item danger">删除</button>
+                            </div>
+                        </div>
                     </div>
-                    <button onclick="window.appConfig.deleteEmailGroup('${group.id}')" class="delete-btn">删除</button>
                 </div>
 
                 <div class="group-email">
@@ -937,9 +1204,9 @@ class ConfigManager {
                         </div>
                         <div id="addCoinForm_${group.id}" class="add-coin-form" style="display: none;">
                             <select id="newCoinExchange_${group.id}">
-                                <option value="binance">Binance</option>
-                                <option value="okx">OKX</option>
-                                <option value="bybit">Bybit</option>
+                                <option value="OKX">OKX</option>
+                                <option value="Binance">Binance</option>
+                                <option value="Bybit">Bybit</option>
                             </select>
                             <input type="text" id="newCoinSymbol_${group.id}" placeholder="币种代码 (如: BTC, USDT)">
                             <select id="newCoinTimeframe_${group.id}">
@@ -953,9 +1220,9 @@ class ConfigManager {
                     ` : `
                         <div class="add-coin-form">
                             <select id="newCoinExchange_${group.id}">
-                                <option value="binance">Binance</option>
-                                <option value="okx">OKX</option>
-                                <option value="bybit">Bybit</option>
+                                <option value="OKX">OKX</option>
+                                <option value="Binance">Binance</option>
+                                <option value="Bybit">Bybit</option>
                             </select>
                             <input type="text" id="newCoinSymbol_${group.id}" placeholder="币种代码 (如: BTC, USDT)">
                             <select id="newCoinTimeframe_${group.id}">
@@ -970,16 +1237,75 @@ class ConfigManager {
                     <div class="coins-list" style="margin-top: 12px;">
                         ${group.coins.slice().reverse().map((coin, index) => {
                             const actualIndex = group.coins.length - 1 - index;
+
+                            // 获取币种状态（统一使用小写交易所名称进行匹配）
+                            const coinKey = `${coin.symbol}_${coin.exchange.toLowerCase()}_${coin.timeframe}`;
+                            const coinState = monitoringStatus?.[coinKey] || { status: 'normal' };
+
+                            // 新的冷却期显示逻辑 - 只在冷却时显示
+                            const getCooldownDisplay = (coinState) => {
+                                if (coinState.status === 'alert' && coinState.next_notification) {
+                                    const now = new Date();
+                                    const nextTime = new Date(coinState.next_notification);
+
+                                    if (nextTime > now) {
+                                        // 还在冷却期
+                                        const diffMs = nextTime - now;
+                                        const diffMins = Math.ceil(diffMs / (1000 * 60));
+
+                                        if (diffMins < 60) {
+                                            return `冷却中 [${diffMins}分钟后解除]`;
+                                        } else {
+                                            const diffHours = Math.ceil(diffMins / 60);
+                                            return `冷却中 [${diffHours}小时后解除]`;
+                                        }
+                                    }
+                                }
+                                // 正常状态或可以立即通知时，不显示任何内容
+                                return '';
+                            };
+
+                            // 新的利率栏显示逻辑 - 包含警报信息
+                            const getRateDisplay = (coinState, coin) => {
+                                const currentRate = coinState.last_rate || '--';
+
+                                if (coinState.status === 'alert' && coinState.last_notification) {
+                                    // 警报状态：显示发现时间和利率
+                                    const alertTime = new Date(coinState.last_notification);
+                                    const timeStr = `${alertTime.getHours().toString().padStart(2, '0')}:${alertTime.getMinutes().toString().padStart(2, '0')}`;
+                                    return `🚨 ${timeStr}：${currentRate}%`;
+                                } else {
+                                    // 正常状态：只显示利率
+                                    return `${currentRate}%`;
+                                }
+                            };
+
+                            const cooldownDisplay = getCooldownDisplay(coinState);
+
+                            // 判断是否显示冷却期重置选项
+                            const isInCooldown = coinState.status === 'alert' && coinState.next_notification && new Date(coinState.next_notification) > new Date();
+                            const showCooldownOption = isInCooldown;
+
+                            const rateDisplay = getRateDisplay(coinState, coin);
+
                             return `
                             <div class="coin-item-simple">
                                 <span class="coin-text">
                                     <strong>${coin.exchange} - ${coin.symbol}</strong>
-                                    阈值: ${coin.threshold}% | 颗粒度: ${coin.timeframe === '24h' ? '24小时' : '每小时'}
+                                    ${cooldownDisplay ? `<span style="color: #718096; font-size: 0.9em; margin-left: 8px;">${cooldownDisplay}</span>` : ''}
+                                    <br>
+                                    <span style="color: #718096; font-size: 0.9em;">
+                                        ${coinState.last_rate !== null && coinState.last_rate !== undefined ? `${rateDisplay} > ` : ''}
+                                        阈值: ${coin.threshold}% | 颗粒度: ${coin.timeframe === '24h' ? '24小时' : '每小时'}
+                                    </span>
                                 </span>
                                 <div class="coin-actions">
                                     <div class="more-menu">
                                         <button onclick="window.appMonitorUI.toggleMoreMenu('group_${group.id}_${actualIndex}')" class="more-btn-small">⋮</button>
                                         <div id="moreMenu_group_${group.id}_${actualIndex}" class="more-dropdown more-dropdown-small">
+                                            ${showCooldownOption ?
+                                                `<button onclick="window.appMonitorUI.togglePause('${coin.symbol}', '${group.id}', '${coin.exchange}', '${coin.timeframe}')" class="more-dropdown-item">重置冷却期</button>` : ''
+                                            }
                                             <button onclick="window.appConfig.editCoinInGroup('${group.id}', '${actualIndex}')" class="more-dropdown-item">编辑</button>
                                             <button onclick="window.appConfig.removeCoinFromGroup('${group.id}', '${coin.symbol}_${coin.exchange}_${coin.timeframe}')" class="more-dropdown-item danger">删除</button>
                                         </div>
@@ -1017,7 +1343,7 @@ class ConfigManager {
 
         try {
             // 先渲染界面（给用户即时反馈）
-            this.renderEmailGroups();
+            await this.renderEmailGroups();
             window.appUtils?.showAlert?.(`已添加 ${groupName}`, 'success');
 
             // 然后保存到后端
@@ -1031,7 +1357,7 @@ class ConfigManager {
             const groupIndex = groups.findIndex(g => g.id === newGroup.id);
             if (groupIndex !== -1) {
                 groups.splice(groupIndex, 1);
-                this.renderEmailGroups();
+                await this.renderEmailGroups();
             }
         }
     }
@@ -1051,7 +1377,7 @@ class ConfigManager {
 
             // 先从本地状态移除
             groups.splice(groupIndex, 1);
-            this.renderEmailGroups();
+            await this.renderEmailGroups();
 
             try {
                 // 保存到后端
@@ -1063,7 +1389,7 @@ class ConfigManager {
 
                 // 如果删除失败，回滚本地状态
                 window.appState.currentConfig.email_groups.splice(groupIndex, 0, deletedGroup);
-                this.renderEmailGroups();
+                await this.renderEmailGroups();
             }
         }
     }
@@ -1108,7 +1434,8 @@ class ConfigManager {
 
         try {
             await this.saveConfig();
-            this.renderEmailGroups();
+            // 只更新邮箱相关的UI，避免重新渲染整个表单导致状态丢失
+            this.updateGroupEmailUI(groupId, trimmedEmail, emailValid, group.enabled);
 
             // 保留原有提示，但不清空输入
             if (trimmedEmail && !emailValid) {
@@ -1281,7 +1608,7 @@ class ConfigManager {
                 document.getElementById(`newCoinThreshold_${groupId}`).value = '';
 
                 // 重新渲染界面以显示新币种（这会自动显示按钮并隐藏表单）
-                this.renderEmailGroups();
+                await this.renderEmailGroups();
             } catch (error) {
                 console.error('添加币种失败:', error);
                 window.appUtils?.showAlert?.('添加失败，请重试', 'error');
@@ -1292,7 +1619,7 @@ class ConfigManager {
                 );
                 if (coinIndex !== -1) {
                     group.coins.splice(coinIndex, 1);
-                    this.renderEmailGroups();
+                    await this.renderEmailGroups();
                 }
             }
         }
@@ -1323,9 +1650,9 @@ class ConfigManager {
                     <div class="form-group">
                         <label>交易所:</label>
                         <select id="editExchange">
-                            <option value="binance" ${coin.exchange === 'binance' ? 'selected' : ''}>Binance</option>
-                            <option value="okx" ${coin.exchange === 'okx' ? 'selected' : ''}>OKX</option>
-                            <option value="bybit" ${coin.exchange === 'bybit' ? 'selected' : ''}>Bybit</option>
+                            <option value="OKX" ${coin.exchange === 'OKX' ? 'selected' : ''}>OKX</option>
+                            <option value="Binance" ${coin.exchange === 'Binance' ? 'selected' : ''}>Binance</option>
+                            <option value="Bybit" ${coin.exchange === 'Bybit' ? 'selected' : ''}>Bybit</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -1397,7 +1724,7 @@ class ConfigManager {
 
         try {
             await this.saveConfig();
-            this.renderEmailGroups();
+            await this.renderEmailGroups();
             this.closeDialog();
             window.appUtils?.showAlert?.('币种更新成功', 'success');
         } catch (error) {
@@ -1433,7 +1760,7 @@ class ConfigManager {
 
                 // 先从本地状态移除
                 group.coins.splice(coinIndex, 1);
-                this.renderEmailGroups();
+                await this.renderEmailGroups();
 
                 try {
                     // 保存配置
@@ -1445,7 +1772,7 @@ class ConfigManager {
 
                     // 回滚：恢复币种
                     group.coins.splice(coinIndex, 0, removedCoin);
-                    this.renderEmailGroups();
+                    await this.renderEmailGroups();
                 }
             }
         }

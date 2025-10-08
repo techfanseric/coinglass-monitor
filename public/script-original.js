@@ -301,7 +301,7 @@
                 const statusClass = state.status === 'alert' ? '#ef4444' :
                                    state.status === 'normal' ? '#10b981' : '#f59e0b';
                 const statusText = state.status === 'alert' ? '警报' :
-                                  state.status === 'normal' ? '正常' : '冷却中';
+                                  state.status === 'normal' ? '正常' : '冷却期内';
 
                 // 格式化时间显示
                 const timeframeText = coin.timeframe === '1h' ? '每小时' :
@@ -337,7 +337,7 @@
                 const showCooldownOption = isInCooldown;
 
                 // 显示配置信息
-                const exchangeDisplay = coin.exchange || 'binance';
+                const exchangeDisplay = coin.exchange || 'Binance';
                 const timeframeDisplay = timeframeText;
 
                 html += '<div class="monitor-item">' +
@@ -1517,9 +1517,9 @@
                             </div>
                             <div id="addCoinForm_${group.id}" class="add-coin-form" style="display: none;">
                                 <select id="newCoinExchange_${group.id}">
-                                    <option value="binance">Binance</option>
-                                    <option value="okx">OKX</option>
-                                    <option value="bybit">Bybit</option>
+                                    <option value="Binance">Binance</option>
+                                    <option value="OKX">OKX</option>
+                                    <option value="Bybit">Bybit</option>
                                 </select>
                                 <input type="text" id="newCoinSymbol_${group.id}" placeholder="币种">
                                 <select id="newCoinTimeframe_${group.id}">
@@ -1533,9 +1533,9 @@
                         ` : `
                             <div class="add-coin-form">
                                 <select id="newCoinExchange_${group.id}">
-                                    <option value="binance">Binance</option>
-                                    <option value="okx">OKX</option>
-                                    <option value="bybit">Bybit</option>
+                                    <option value="Binance">Binance</option>
+                                    <option value="OKX">OKX</option>
+                                    <option value="Bybit">Bybit</option>
                                 </select>
                                 <input type="text" id="newCoinSymbol_${group.id}" placeholder="币种">
                                 <select id="newCoinTimeframe_${group.id}">
@@ -1765,9 +1765,9 @@
                         <div class="form-group">
                             <label>交易所:</label>
                             <select id="editExchange">
-                                <option value="binance" ${coin.exchange === 'binance' ? 'selected' : ''}>Binance</option>
-                                <option value="okx" ${coin.exchange === 'okx' ? 'selected' : ''}>OKX</option>
-                                <option value="bybit" ${coin.exchange === 'bybit' ? 'selected' : ''}>Bybit</option>
+                                <option value="Binance" ${coin.exchange === 'Binance' ? 'selected' : ''}>Binance</option>
+                                <option value="OKX" ${coin.exchange === 'OKX' ? 'selected' : ''}>OKX</option>
+                                <option value="Bybit" ${coin.exchange === 'Bybit' ? 'selected' : ''}>Bybit</option>
                             </select>
                         </div>
                         <div class="form-group">
