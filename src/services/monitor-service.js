@@ -40,8 +40,9 @@ export async function runMonitoring() {
     }
 
     // 满足条件，开始执行监控任务
-    loggerService.info(`${logPrefix} 开始执行监控任务`);
-    console.log('1. 开始执行监控任务...');
+    const currentTime = formatDateTime(new Date());
+    loggerService.info(`${logPrefix} 开始执行监控任务 [${currentTime}]`);
+    console.log(`1. 开始执行监控任务... [${currentTime}]`);
 
     // 检查是否有邮件组配置
     if (!config.email_groups || !Array.isArray(config.email_groups) || config.email_groups.length === 0) {
@@ -65,8 +66,9 @@ export async function runMonitoring() {
  */
 async function runGroupedMonitoring(config) {
   const logPrefix = '[分组监控]';
-  loggerService.info(`${logPrefix} 开始执行分组监控任务`);
-  console.log('2. 使用邮件分组模式执行监控...');
+  const currentTime = formatDateTime(new Date());
+  loggerService.info(`${logPrefix} 开始执行分组监控任务 [${currentTime}]`);
+  console.log(`2. 使用邮件分组模式执行监控... [${currentTime}]`);
 
   const groupResults = [];
 
@@ -780,12 +782,14 @@ async function checkGroupCoinThreshold(group, coin, currentRate, allCoinsData, g
 async function runLegacyMonitoring(config) {
   try {
   const logPrefix = '[传统监控]';
-  loggerService.info(`${logPrefix} 使用传统监控模式`);
-  console.log('2. 使用传统模式执行监控...');
+  const currentTime = formatDateTime(new Date());
+  loggerService.info(`${logPrefix} 使用传统监控模式 [${currentTime}]`);
+  console.log(`2. 使用传统模式执行监控... [${currentTime}]`);
 
   // 原有的监控逻辑，保持不变
-  loggerService.info(`${logPrefix} 触发条件满足，开始按币种独立抓取 CoinGlass 数据`);
-  console.log('3. 触发条件满足，开始按币种独立抓取 CoinGlass 数据...');
+  const currentTime3 = formatDateTime(new Date());
+  loggerService.info(`${logPrefix} 触发条件满足，开始按币种独立抓取 CoinGlass 数据 [${currentTime3}]`);
+  console.log(`3. 触发条件满足，开始按币种独立抓取 CoinGlass 数据... [${currentTime3}]`);
 
   // 3. 使用共享浏览器会话批量抓取数据
   const enabledCoins = config.coins.filter(c => c.enabled);

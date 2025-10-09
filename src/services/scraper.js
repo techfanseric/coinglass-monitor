@@ -172,7 +172,41 @@ export class ScraperService {
         // 为重复币种创建唯一标识符（基于交易所和时间框架）
         // 使用小写交易所名称，与页面内部逻辑保持一致
         const coinKey = `${targetCoin}_${exchange.toLowerCase()}_${timeframe}`;
-        await this.switchCoin(usePage, targetCoin);
+
+        // 🔒 修正：币种切换失败时重新访问页面
+        const coinSwitchSuccess = await this.switchCoin(usePage, targetCoin);
+        if (!coinSwitchSuccess) {
+          console.warn(`❌ 币种 ${targetCoin} 切换失败，重新访问页面...`);
+
+          // 重新访问 CoinGlass 页面
+          try {
+            console.log(`🌐 重新访问 CoinGlass 页面以恢复币种 ${targetCoin}...`);
+            await usePage.goto(this.config.coinglassBaseUrl, {
+              waitUntil: 'networkidle2',
+              timeout: this.config.pageTimeout
+            });
+
+            console.log('⏳ 等待页面完全加载...');
+            await usePage.waitForTimeout(this.config.waitTimes.initial);
+
+            // 重新切换交易所
+            await this.switchExchangeIfNeeded(usePage, exchange);
+            await usePage.waitForTimeout(this.config.waitTimes.exchange);
+
+            // 再次尝试切换币种
+            const retrySuccess = await this.switchCoin(usePage, targetCoin);
+            if (!retrySuccess) {
+              console.error(`❌ 币种 ${targetCoin} 重新访问页面后切换仍然失败，跳过此币种`);
+              continue; // 只有在重新访问后仍然失败才跳过
+            }
+
+            console.log(`✅ 币种 ${targetCoin} 重新访问页面后切换成功`);
+          } catch (reloadError) {
+            console.error(`❌ 重新访问页面失败: ${reloadError.message}`);
+            continue; // 重新访问失败才跳过
+          }
+        }
+
         // 等待页面数据更新，特别是切换币种后需要更长时间
         await usePage.waitForTimeout(this.config.waitTimes.coin);
 
@@ -180,17 +214,35 @@ export class ScraperService {
         await this.switchTimeframe(usePage, timeframe);
         await usePage.waitForTimeout(this.config.waitTimes.data);
 
-        // 验证切换结果
+        // 🔍 验证切换结果（双重验证）
         const switchVerification = await this.verifySwitchResult(usePage, exchange, targetCoin);
 
         if (!switchVerification.success) {
           console.warn(`⚠️ 切换验证失败: ${switchVerification.reason}`);
-          // 重试一次
-          if (switchVerification.currentCoin !== targetCoin) {
-            await this.switchCoin(usePage, targetCoin);
-            await usePage.waitForTimeout(this.config.waitTimes.retry);
-            await this.switchTimeframe(usePage, timeframe);
-            await usePage.waitForTimeout(this.config.waitTimes.data);
+
+          // 🔄 使用智能页面重新加载机制
+          console.log(`🔄 币种 ${targetCoin} 验证失败，启动智能页面重新加载...`);
+
+          try {
+            const reloadResult = await this.performSmartPageReload(
+              usePage,
+              exchange,
+              targetCoin,
+              timeframe,
+              switchVerification.reason
+            );
+
+            if (reloadResult.success) {
+              console.log(`✅ 智能重新加载成功，继续处理 ${targetCoin}`);
+              // 重新加载成功，继续后续的数据提取流程
+            } else {
+              console.error(`❌ 智能重新加载失败，跳过币种 ${targetCoin}`);
+              continue; // 跳过此币种
+            }
+          } catch (reloadError) {
+            console.error(`❌ 智能页面重新加载异常: ${reloadError.message}`);
+            console.log(`⚠️ 跳过币种 ${targetCoin}，将在下次监控中重试`);
+            continue; // 跳过此币种
           }
         }
 
@@ -221,16 +273,29 @@ export class ScraperService {
         const actualCoinKey = `${targetCoin}_${normalizedExchange}_${timeframe}`;
 
         if (extractedData && extractedData.coins && extractedData.coins[actualCoinKey]) {
+          const coinData = extractedData.coins[actualCoinKey];
+
+          // 🔍 严格的数据验证机制
+          const validationResult = this.validateCoinData(coinData, targetCoin, exchange, timeframe);
+
+          if (!validationResult.isValid) {
+            console.warn(`❌ ${targetCoin} 数据验证失败: ${validationResult.reason}`);
+            console.log(`⚠️ 跳过此币种，避免使用错误数据`);
+            continue; // 跳过此币种
+          }
+
           console.log(`📊 成功提取真实数据: 找到 ${Object.keys(extractedData.coins).length} 个币种`);
+          console.log(`✅ 数据验证通过: ${validationResult.reason}`);
 
           // 为重复币种创建唯一标识的数据副本
           const coinDataWithKey = {
-            ...extractedData.coins[actualCoinKey],
+            ...coinData,
             exchange: exchange,
             timeframe: timeframe,
             coin_key: coinKey,
             symbol_display: `${targetCoin} (${timeframe === '24h' ? '24小时' : timeframe})`,
-            scrape_timestamp: new Date().toISOString()
+            scrape_timestamp: new Date().toISOString(),
+            validation_info: validationResult // 添加验证信息
           };
 
           // 对于重复币种，优先使用复合键存储，避免数据覆盖
@@ -1128,6 +1193,284 @@ export class ScraperService {
     } catch (error) {
       console.error('❌ 切换时间框架失败:', error);
       // 不抛出错误，允许继续使用默认时间框架
+    }
+  }
+
+  /**
+   * 智能页面重新加载机制 - 用于恢复币种切换失败
+   */
+  async performSmartPageReload(page, exchange, targetCoin, timeframe, failureReason) {
+    const maxRetries = 2;
+    let retryCount = 0;
+
+    while (retryCount < maxRetries) {
+      retryCount++;
+      console.log(`🔄 第 ${retryCount} 次智能重新加载页面 (原因: ${failureReason})...`);
+
+      try {
+        // 1. 截图保存失败状态
+        if (process.env.COINGLASS_DEBUG_SCREENSHOTS === 'true') {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          const failureScreenshot = `${timestamp}_RELOAD_${retryCount}_${exchange}_${targetCoin}_failure.png`;
+          const failurePath = path.join(this.config.screenshotDir, failureScreenshot);
+
+          if (!fs.existsSync(path.dirname(failurePath))) {
+            fs.mkdirSync(path.dirname(failurePath), { recursive: true });
+          }
+
+          await page.screenshot({ path: failurePath, fullPage: false });
+          console.log(`📸 失败状态截图已保存: ${failurePath}`);
+        }
+
+        // 2. 记录失败信息
+        const failureInfo = {
+          timestamp: new Date().toISOString(),
+          exchange,
+          coin: targetCoin,
+          timeframe,
+          reason: failureReason,
+          retry_count: retryCount
+        };
+        console.log(`💾 记录失败信息:`, failureInfo);
+
+        // 3. 重新加载页面
+        console.log(`🌐 重新加载 CoinGlass 页面...`);
+        await page.reload({
+          waitUntil: 'networkidle2',
+          timeout: this.config.navigationTimeout
+        });
+
+        // 4. 等待页面完全稳定
+        console.log(`⏳ 等待页面重新加载完成...`);
+        await page.waitForTimeout(this.config.waitTimes.initial);
+        await this.waitForPageStability(page);
+
+        // 5. 验证页面基本可用性
+        const pageReady = await this.verifyPageReadiness(page);
+        if (!pageReady) {
+          console.warn(`⚠️ 页面重新加载后仍未就绪，准备第 ${retryCount + 1} 次重试`);
+          if (retryCount >= maxRetries) {
+            throw new Error('页面重新加载后仍无法正常工作');
+          }
+          continue;
+        }
+
+        // 6. 重新切换交易所
+        console.log(`🔄 重新切换交易所: ${exchange}...`);
+        const exchangeSuccess = await this.switchExchangeIfNeeded(page, exchange);
+        if (!exchangeSuccess) {
+          console.warn(`⚠️ 交易所切换失败，准备第 ${retryCount + 1} 次重试`);
+          if (retryCount >= maxRetries) {
+            throw new Error('页面重新加载后交易所切换失败');
+          }
+          continue;
+        }
+
+        // 7. 重新切换币种
+        console.log(`🔄 重新切换币种: ${targetCoin}...`);
+        const coinSuccess = await this.switchCoin(page, targetCoin);
+        if (!coinSuccess) {
+          console.warn(`⚠️ 币种切换失败，准备第 ${retryCount + 1} 次重试`);
+          if (retryCount >= maxRetries) {
+            throw new Error('页面重新加载后币种切换失败');
+          }
+          continue;
+        }
+
+        // 8. 重新切换时间框架
+        console.log(`🔄 重新切换时间框架: ${timeframe}...`);
+        await this.switchTimeframe(page, timeframe);
+        await page.waitForTimeout(this.config.waitTimes.data);
+
+        // 9. 最终验证
+        console.log(`🔍 最终验证页面状态...`);
+        const finalVerification = await this.verifySwitchResult(page, exchange, targetCoin);
+
+        if (finalVerification.success) {
+          console.log(`✅ 智能页面重新加载成功 (第 ${retryCount} 次尝试)`);
+          return {
+            success: true,
+            retry_count: retryCount,
+            verification_result: finalVerification
+          };
+        } else {
+          console.warn(`⚠️ 最终验证失败: ${finalVerification.reason}，准备第 ${retryCount + 1} 次重试`);
+          if (retryCount >= maxRetries) {
+            throw new Error(`页面重新加载后验证仍然失败: ${finalVerification.reason}`);
+          }
+        }
+
+      } catch (error) {
+        console.error(`❌ 第 ${retryCount} 次页面重新加载失败:`, error.message);
+        if (retryCount >= maxRetries) {
+          throw new Error(`智能页面重新加载失败: ${error.message}`);
+        }
+      }
+
+      // 重试前等待
+      await page.waitForTimeout(this.config.waitTimes.retry * 2);
+    }
+
+    throw new Error('页面重新加载重试次数已用完');
+  }
+
+  /**
+   * 验证页面是否准备就绪
+   */
+  async verifyPageReadiness(page) {
+    try {
+      console.log(`🔍 检查页面准备状态...`);
+
+      const readiness = await page.evaluate(() => {
+        // 检查基本DOM元素
+        const hasCombobox = document.querySelectorAll('[role="combobox"]').length > 0;
+        const hasTable = document.querySelectorAll('table').length > 0;
+        const hasContent = document.body.textContent.trim().length > 100;
+
+        // 检查页面是否完全加载
+        const isComplete = document.readyState === 'complete';
+
+        // 检查是否有错误元素
+        const hasError = document.body.textContent.includes('Error') ||
+                        document.body.textContent.includes('错误') ||
+                        document.body.textContent.includes('404');
+
+        return {
+          hasCombobox,
+          hasTable,
+          hasContent,
+          isComplete,
+          hasError,
+          isReady: hasCombobox && hasTable && hasContent && isComplete && !hasError
+        };
+      });
+
+      console.log(`📊 页面准备状态: ${JSON.stringify(readiness)}`);
+
+      if (readiness.isReady) {
+        console.log(`✅ 页面准备就绪`);
+        return true;
+      } else {
+        console.warn(`⚠️ 页面未准备就绪: ${readiness.hasError ? '存在错误' : '元素缺失'}`);
+        return false;
+      }
+
+    } catch (error) {
+      console.error(`❌ 页面准备状态检查失败:`, error.message);
+      return false;
+    }
+  }
+
+  /**
+   * 验证币种数据的准确性和一致性
+   */
+  validateCoinData(coinData, expectedCoin, expectedExchange, expectedTimeframe) {
+    const validationResults = {
+      isValid: true,
+      reasons: [],
+      warnings: []
+    };
+
+    try {
+      // 1. 基本数据结构验证
+      if (!coinData || typeof coinData !== 'object') {
+        validationResults.isValid = false;
+        validationResults.reasons.push('数据结构无效');
+        return validationResults;
+      }
+
+      // 2. 币种符号验证
+      if (!coinData.symbol || coinData.symbol !== expectedCoin.toUpperCase()) {
+        validationResults.isValid = false;
+        validationResults.reasons.push(`币种符号不匹配: 期望 ${expectedCoin.toUpperCase()}, 实际 ${coinData.symbol}`);
+        return validationResults;
+      }
+
+      // 3. 利率数据验证
+      if (typeof coinData.annual_rate !== 'number' || coinData.annual_rate < 0) {
+        validationResults.isValid = false;
+        validationResults.reasons.push(`年利率数据无效: ${coinData.annual_rate}`);
+        return validationResults;
+      }
+
+      // 4. 合理性检查 - 利率范围验证（一般借贷利率在0.01%到100%之间）
+      if (coinData.annual_rate > 100) {
+        validationResults.warnings.push(`年利率异常高: ${coinData.annual_rate}%`);
+      } else if (coinData.annual_rate < 0.01) {
+        validationResults.warnings.push(`年利率异常低: ${coinData.annual_rate}%`);
+      }
+
+      // 5. 历史数据验证
+      if (!coinData.history || !Array.isArray(coinData.history) || coinData.history.length === 0) {
+        validationResults.warnings.push('历史数据为空或无效');
+      } else {
+        // 验证历史数据的一致性
+        const inconsistentData = coinData.history.some(point =>
+          typeof point.annual_rate !== 'number' ||
+          point.annual_rate < 0 ||
+          !point.time
+        );
+
+        if (inconsistentData) {
+          validationResults.warnings.push('历史数据中存在不一致的记录');
+        }
+
+        // 检查当前利率是否在历史数据范围内
+        const minRate = Math.min(...coinData.history.map(p => p.annual_rate));
+        const maxRate = Math.max(...coinData.history.map(p => p.annual_rate));
+
+        if (coinData.annual_rate < minRate || coinData.annual_rate > maxRate) {
+          validationResults.warnings.push(`当前利率 ${coinData.annual_rate}% 超出历史范围 [${minRate}%, ${maxRate}%]`);
+        }
+      }
+
+      // 6. 交易所和时间框架验证
+      if (coinData.exchange && coinData.exchange !== expectedExchange) {
+        validationResults.warnings.push(`交易所不匹配: 期望 ${expectedExchange}, 实际 ${coinData.exchange}`);
+      }
+
+      if (coinData.timeframe && coinData.timeframe !== expectedTimeframe) {
+        validationResults.warnings.push(`时间框架不匹配: 期望 ${expectedTimeframe}, 实际 ${coinData.timeframe}`);
+      }
+
+      // 7. 数据时间戳验证
+      if (coinData.scrape_timestamp) {
+        const scrapeTime = new Date(coinData.scrape_timestamp);
+        const now = new Date();
+        const ageMinutes = (now - scrapeTime) / (1000 * 60);
+
+        if (ageMinutes > 60) {
+          validationResults.warnings.push(`数据时间戳过旧: ${ageMinutes.toFixed(0)} 分钟前`);
+        }
+      }
+
+      // 8. 数据来源验证
+      if (!coinData.source || coinData.source !== 'coinglass_real_time') {
+        validationResults.warnings.push(`数据来源异常: ${coinData.source}`);
+      }
+
+      // 9. 注意：移除了连续相同利率检测，因为这是正常现象
+      // 连续相同的利率在稳定市场中是常见情况，不代表数据复用问题
+
+      // 生成综合验证结果
+      if (validationResults.reasons.length > 0) {
+        validationResults.isValid = false;
+        validationResults.reason = validationResults.reasons.join('; ');
+      } else if (validationResults.warnings.length > 0) {
+        validationResults.reason = `数据验证通过但有警告: ${validationResults.warnings.join('; ')}`;
+      } else {
+        validationResults.reason = '数据验证完全通过';
+      }
+
+      return validationResults;
+
+    } catch (error) {
+      return {
+        isValid: false,
+        reason: `验证过程出错: ${error.message}`,
+        reasons: [error.message],
+        warnings: []
+      };
     }
   }
 
