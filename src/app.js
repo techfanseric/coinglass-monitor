@@ -834,110 +834,27 @@ function startDataCleanup() {
   return cleanupTask;
 }
 
-// Git自动更新（仅在脚本启动模式下明确启用）
-function startGitAutoUpdate() {
-  // 检查是否启用自动更新（支持true或Git仓库地址）
+// 自动更新功能（ZIP方式）
+function startAutoUpdate() {
+  // 检查是否启用自动更新
   const autoUpdateConfig = process.env.ENABLE_AUTO_UPDATE;
   if (!autoUpdateConfig || autoUpdateConfig === 'false') {
     return; // 静默跳过，这是默认安全设置
   }
 
-  console.log('🔄 启动Git自动更新...');
-
-  // 检查是否为Git仓库
-  let isGitRepo = false;
-  try {
-    const isGitRepoCheck = spawn('git', ['rev-parse', '--git-dir'], { stdio: 'ignore', shell: true });
-    if (isGitRepoCheck.status === 0) {
-      isGitRepo = true;
-    }
-  } catch (error) {
-    // Git检查失败，继续尝试备用方案
-  }
-
-  // 如果不是Git仓库但配置了Git地址，使用备用更新方案
-  if (!isGitRepo && autoUpdateConfig !== 'true' && autoUpdateConfig.startsWith('http')) {
-    console.log('📦 检测到非Git仓库，使用ZIP自动更新方案...');
+  // 检查是否配置了Git仓库地址（ZIP方式）
+  if (autoUpdateConfig.startsWith('http')) {
+    console.log('📦 启动ZIP自动更新方案...');
     startZipAutoUpdate(autoUpdateConfig);
     return;
   }
 
-  if (!isGitRepo) {
-    console.log('⚠️  非Git仓库且未配置Git地址，跳过自动更新');
-    console.log('💡 提示：设置 ENABLE_AUTO_UPDATE=https://github.com/user/repo.git 启用ZIP自动更新');
-    return;
-  }
-
-  // 每5分钟检查一次更新
-  setInterval(() => {
-    (async () => {
-      try {
-        // 检查工作目录状态
-        const gitStatus = spawn('git', ['status', '--porcelain'], { stdio: 'pipe', shell: true });
-        if (gitStatus.status !== 0) return;
-
-        // 检查远程更新
-        const fetchResult = spawn('git', ['fetch', 'origin'], { stdio: 'pipe', shell: true });
-        if (fetchResult.status !== 0) return;
-
-        // 等待fetch完成
-        await new Promise(resolve => {
-          fetchResult.on('close', resolve);
-        });
-
-        const localCommit = spawn('git', ['rev-parse', 'HEAD'], { stdio: 'pipe', shell: true });
-        const remoteCommit = spawn('git', ['rev-parse', 'origin/main'], { stdio: 'pipe', shell: true });
-
-        if (localCommit.status === 0 && remoteCommit.status === 0) {
-          const local = localCommit.stdout.toString().trim();
-          const remote = remoteCommit.stdout.toString().trim();
-
-          if (local !== remote) {
-            console.log('🔄 发现新版本，开始更新...');
-
-            // 创建完整备份（配置和状态）
-            try {
-              const { storageService } = await import('./services/storage.js');
-              const backupPath = await storageService.backup();
-              if (backupPath) {
-                console.log(`✅ 更新前备份已创建: ${backupPath}`);
-              }
-            } catch (error) {
-              console.warn('⚠️  更新前备份失败:', error.message);
-            }
-
-            // 拉取更新 - 使用pipe避免Windows控制台问题
-            console.log('📥 正在拉取最新代码...');
-            const pullResult = spawn('git', ['pull'], { stdio: 'pipe', shell: true });
-
-            pullResult.stdout.on('data', (data) => {
-              console.log(data.toString().trim());
-            });
-
-            pullResult.stderr.on('data', (data) => {
-              console.error('Git错误:', data.toString().trim());
-            });
-
-            pullResult.on('close', (code) => {
-              if (code === 0) {
-                console.log('✅ 更新完成，服务将在5秒后重启...');
-                setTimeout(() => {
-                  process.exit(0); // 进程管理器会自动重启
-                }, 5000);
-              } else {
-                console.error('❌ Git拉取失败，退出代码:', code);
-              }
-            });
-          }
-        }
-      } catch (error) {
-        console.log('⚠️  自动更新检查失败:', error.message);
-      }
-    })();
-  }, 5 * 60 * 1000); // 5分钟
+  // 无效配置
+  console.log('⚠️  ENABLE_AUTO_UPDATE 配置无效');
+  console.log('💡 请设置为: ENABLE_AUTO_UPDATE=https://github.com/techfanseric/coinglass-monitor.git');
 }
 
-// ZIP自动更新功能（用于非Git仓库部署）
+// ZIP自动更新功能（推荐使用）
 async function startZipAutoUpdate(gitRepoUrl) {
   console.log(`📦 ZIP自动更新已启用，仓库: ${gitRepoUrl}`);
 
@@ -1206,8 +1123,8 @@ async function startServer() {
     // 启动监控定时任务
     startMonitoringScheduler();
 
-    // 启动Git自动更新
-    startGitAutoUpdate();
+    // 启动自动更新
+    startAutoUpdate();
 
     // 启动HTTP服务器
     app.listen(PORT, () => {
