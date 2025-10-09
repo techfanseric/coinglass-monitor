@@ -181,7 +181,7 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 **首次使用**：
 1. 复制 `.env.example` 为 `.env`
 2. 运行 `npm run setup` 自动配置 Chrome 路径和创建目录
-3. 编辑 `.env` 配置 EMAILJS_PRIVATE_KEY 和其他必要参数
+3. 编辑 `.env` 配置 EmailJS 参数和其他必要参数
 4. 确保在 `.env` 中配置了 `PORT` 参数（系统无默认端口）
 
 ### 本地存储架构
@@ -298,11 +298,16 @@ npm run setup           # 自动检测 Chrome 路径并创建必要目录（推�
 
 ## EmailJS配置
 系统支持通过 EmailJS 发送邮件通知，需要配置以下参数：
-- **EMAILJS_SERVICE_ID**: EmailJS 服务ID
-- **EMAILJS_TEMPLATE_ID**: 邮件模板ID
-- **EMAILJS_PUBLIC_KEY**: EmailJS 公钥
-- **EMAILJS_PRIVATE_KEY**: EmailJS 私钥
+- **EMAILJS_SERVICE_ID**: EmailJS 服务ID（支持多个配置，逗号分隔）
+- **EMAILJS_TEMPLATE_ID**: 邮件模板ID（支持多个配置，逗号分隔）
+- **EMAILJS_PUBLIC_KEY**: EmailJS 公钥（支持多个配置，逗号分隔）
 - **EMAILJS_API_URL**: EmailJS API地址
+- **EMAILJS_TIMEOUT**: 请求超时时间
+
+**多配置支持**：
+- 支持配置多个邮箱服务，当第一个配额用完时自动切换到下一个
+- 配置格式：`EMAILJS_SERVICE_ID=service1,service2,service3`
+- 系统会按顺序尝试每个配置，确保邮件发送不中断
 
 **模板功能**：
 - 多币种支持与数组循环
@@ -414,11 +419,12 @@ CHANGELOG.md 必须面向用户，关注功能改进和体验提升，避免技�
 **传统安装**：
 1. 复制 `.env.example` 为 `.env`
 2. 运行 `npm run setup` 自动配置 Chrome 路径和创建必要目录
-3. 编辑 `.env` 文件，主要配置 `EMAILJS_PRIVATE_KEY` 和其他必要参数
+3. 编辑 `.env` 文件，配置 EmailJS 参数和其他必要参数
 
 **现有用户**：
 - 如果已有 `.env` 文件，直接运行 `npm run setup` 更新 Chrome 路径
 - 所有配置现在集中在一个文件中，无需管理多个配置文件
+- 移除了 `EMAILJS_PRIVATE_KEY` 配置项，简化配置流程
 
 **目录结构**：
 - `data/` 目录会在首次运行时自动创建

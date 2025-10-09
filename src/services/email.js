@@ -146,10 +146,10 @@ export async function sendAlert(env, coin, currentRate, rateData, config) {
     };
 
     // 准备邮件数据
-    const emailData = prepareAlertEmail(alertData, env);
+    const emailData = prepareAlertEmail(alertData, {}, config);
 
     // 发送邮件
-    const success = await sendEmailJS(env, emailData);
+    const success = await sendEmailJS(emailData);
 
     if (success) {
       console.log(`✅ 警报邮件发送成功: ${coin.symbol}`);
@@ -184,10 +184,10 @@ export async function sendRecovery(env, coin, currentRate, config) {
     };
 
     // 准备邮件数据
-    const emailData = prepareRecoveryEmail(recoveryData, env, config);
+    const emailData = prepareRecoveryEmail(recoveryData, {}, config);
 
     // 发送邮件
-    const success = await sendEmailJS(env, emailData);
+    const success = await sendEmailJS(emailData);
 
     if (success) {
       console.log(`✅ 回落通知邮件发送成功: ${coin.symbol}`);
@@ -220,15 +220,7 @@ export async function sendTestEmail(email) {
 
     const emailData = prepareTestEmail(testData);
 
-    // 构建env对象用于测试邮件
-    const env = {
-      EMAILJS_SERVICE_ID: process.env.EMAILJS_SERVICE_ID,
-      EMAILJS_TEMPLATE_ID: process.env.EMAILJS_TEMPLATE_ID,
-      EMAILJS_PUBLIC_KEY: process.env.EMAILJS_PUBLIC_KEY,
-      EMAILJS_PRIVATE_KEY: process.env.EMAILJS_PRIVATE_KEY
-    };
-
-    const success = await sendEmailJS(env, emailData);
+    const success = await sendEmailJS(emailData);
 
     if (success) {
       console.log('✅ 测试邮件发送成功');
@@ -567,10 +559,7 @@ function prepareAlertEmail(alertData, env, config = null) {
   const monitoringSettings = generateMonitoringSettingsInfo(config);
 
   return {
-    service_id: env.EMAILJS_SERVICE_ID,
-    template_id: env.EMAILJS_TEMPLATE_ID,
-    user_id: env.EMAILJS_PUBLIC_KEY,
-    template_params: {
+      template_params: {
       to_email: alertData.email,
       subject: title,
       exchange_name: alertData.exchange,
@@ -629,10 +618,7 @@ function prepareRecoveryEmail(recoveryData, env, config = null) {
   };
 
   return {
-    service_id: env.EMAILJS_SERVICE_ID,
-    template_id: env.EMAILJS_TEMPLATE_ID,
-    user_id: env.EMAILJS_PUBLIC_KEY,
-    template_params: {
+      template_params: {
       to_email: recoveryData.email,
       subject: title,
       exchange_name: 'CoinGlass监控',
@@ -672,9 +658,7 @@ function prepareTestEmail(testData) {
   };
 
   return {
-    service_id: process.env.EMAILJS_SERVICE_ID,
-    template_id: process.env.EMAILJS_TEMPLATE_ID,
-    user_id: process.env.EMAILJS_PUBLIC_KEY,
+    // 移除固定配置，让 sendEmailJS 函数处理配置选择
     template_params: {
       to_email: testData.email,
       subject: title,
@@ -707,52 +691,109 @@ function prepareTestEmail(testData) {
 }
 
 /**
- * 通过EmailJS发送邮件
+ * 解析多邮箱配置
  */
-async function sendEmailJS(env, emailData) {
-  try {
-    // EmailJS API调用参数 - 使用Private Key认证
-    const requestData = {
-      service_id: emailData.service_id,
-      template_id: emailData.template_id,
-      user_id: emailData.user_id,
-      template_params: emailData.template_params,
-      accessToken: env.EMAILJS_PRIVATE_KEY || emailData.user_id
-    };
+function parseEmailConfigs() {
+  const serviceIds = process.env.EMAILJS_SERVICE_ID?.split(',').map(s => s.trim()) || [];
+  const templateIds = process.env.EMAILJS_TEMPLATE_ID?.split(',').map(s => s.trim()) || [];
+  const publicKeys = process.env.EMAILJS_PUBLIC_KEY?.split(',').map(s => s.trim()) || [];
+  const apiUrl = process.env.EMAILJS_API_URL || 'https://api.emailjs.com/api/v1.0/email/send';
 
+  const maxLength = Math.max(serviceIds.length, templateIds.length, publicKeys.length);
+  const configs = [];
 
-    // 尝试直接使用JSON格式，模拟浏览器POST请求
-    const response = await fetch(emailConfig.emailjsApiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Origin': 'https://www.emailjs.com',
-        'Referer': 'https://www.emailjs.com/',
-        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        'Sec-Ch-Ua-Mobile': '?0',
-        'Sec-Ch-Ua-Platform': '"macOS"',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-site'
-      },
-      body: JSON.stringify(requestData)
-    });
-
-    if (response.status === 200) {
-      return true;
-    } else {
-      const errorText = await response.text();
-      console.error('EmailJS 发送失败:', response.status, errorText);
-      return false;
+  for (let i = 0; i < maxLength; i++) {
+    if (serviceIds[i] && templateIds[i] && publicKeys[i]) {
+      configs.push({
+        service_id: serviceIds[i],
+        template_id: templateIds[i],
+        public_key: publicKeys[i],
+        api_url: apiUrl
+      });
     }
-  } catch (error) {
-    console.error('EmailJS 发送异常:', error);
+  }
+
+  return configs;
+}
+
+/**
+ * 通过EmailJS发送邮件（支持多配置自动切换）
+ */
+async function sendEmailJS(emailData) {
+  const configs = parseEmailConfigs();
+
+  if (configs.length === 0) {
+    console.error('❌ 没有可用的邮件配置');
     return false;
   }
+
+  console.log(`📧 尝试使用 ${configs.length} 个邮件配置发送邮件`);
+
+  for (let i = 0; i < configs.length; i++) {
+    const config = configs[i];
+    console.log(`📧 尝试使用第 ${i + 1} 个邮件配置发送...`);
+
+    try {
+      // EmailJS API调用参数 - 使用当前配置
+      const requestData = {
+        service_id: config.service_id,
+        template_id: config.template_id,
+        user_id: config.public_key,
+        template_params: emailData.template_params,
+        accessToken: config.public_key
+      };
+
+      // 尝试直接使用JSON格式，模拟浏览器POST请求
+      const response = await fetch(config.api_url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Origin': 'https://www.emailjs.com',
+          'Referer': 'https://www.emailjs.com/',
+          'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+          'Sec-Ch-Ua-Mobile': '?0',
+          'Sec-Ch-Ua-Platform': '"macOS"',
+          'Sec-Fetch-Dest': 'empty',
+          'Sec-Fetch-Mode': 'cors',
+          'Sec-Fetch-Site': 'same-site'
+        },
+        body: JSON.stringify(requestData)
+      });
+
+      if (response.status === 200) {
+        if (i > 0) {
+          console.log(`✅ 第 ${i + 1} 个邮件配置发送成功（前 ${i} 个配置失败）`);
+        } else {
+          console.log(`✅ 第 1 个邮件配置发送成功`);
+        }
+        return true;
+      } else {
+        const errorText = await response.text();
+        console.error(`❌ 第 ${i + 1} 个邮件配置发送失败:`, response.status, errorText);
+
+        // 如果不是最后一个配置，继续尝试下一个
+        if (i < configs.length - 1) {
+          console.log(`🔄 切换到下一个邮件配置...`);
+          continue;
+        }
+      }
+    } catch (error) {
+      console.error(`❌ 第 ${i + 1} 个邮件配置发送异常:`, error);
+
+      // 如果不是最后一个配置，继续尝试下一个
+      if (i < configs.length - 1) {
+        console.log(`🔄 切换到下一个邮件配置...`);
+        continue;
+      }
+    }
+  }
+
+  console.error('❌ 所有邮件配置都发送失败');
+  return false;
 }
 
 /**
@@ -774,12 +815,6 @@ export async function sendMultiCoinAlert(triggeredCoins, rateData, config) {
 
     // 准备邮件数据 - 使用第一个触发币种的阈值作为基准
     const primaryCoin = triggeredCoins[0];
-    const env = {
-      EMAILJS_SERVICE_ID: process.env.EMAILJS_SERVICE_ID,
-      EMAILJS_TEMPLATE_ID: process.env.EMAILJS_TEMPLATE_ID,
-      EMAILJS_PUBLIC_KEY: process.env.EMAILJS_PUBLIC_KEY,
-      EMAILJS_PRIVATE_KEY: process.env.EMAILJS_PRIVATE_KEY
-    };
 
     // 构建类似单币种的alertData结构，但包含所有触发币种
     const scrapingSummary = rateData.scraping_info?.individual_results || [];
@@ -802,10 +837,10 @@ export async function sendMultiCoinAlert(triggeredCoins, rateData, config) {
       data: rateData // 传递完整的rateData作为备用
     };
 
-    const emailData = prepareAlertEmail(unifiedAlertData, env, config); // 传递config参数
+    const emailData = prepareAlertEmail(unifiedAlertData, {}, config); // 传递config参数
 
     // 发送邮件
-    const success = await sendEmailJS(env, emailData);
+    const success = await sendEmailJS(emailData);
 
     if (success) {
       console.log(`✅ 多币种警报邮件发送成功: ${triggeredCoins.map(c => c.symbol).join(', ')}`);
@@ -859,16 +894,9 @@ export async function sendGroupAlert(group, triggeredCoins, allCoinsData, global
     // 准备邮件数据
     const emailData = prepareGroupAlertEmail(groupAlertData, globalConfig);
 
-    // 构建env对象
-    const env = {
-      EMAILJS_SERVICE_ID: process.env.EMAILJS_SERVICE_ID,
-      EMAILJS_TEMPLATE_ID: process.env.EMAILJS_TEMPLATE_ID,
-      EMAILJS_PUBLIC_KEY: process.env.EMAILJS_PUBLIC_KEY,
-      EMAILJS_PRIVATE_KEY: process.env.EMAILJS_PRIVATE_KEY
-    };
-
+    
     // 发送邮件
-    const success = await sendEmailJS(env, emailData);
+    const success = await sendEmailJS(emailData);
 
     if (success) {
       console.log(`✅ 邮件发送成功: ${group.name} -> ${triggeredCoins.map(c => `${c.symbol}(${c.current_rate}%)`).join(', ')}`);
@@ -986,9 +1014,7 @@ function prepareGroupAlertEmail(groupAlertData, globalConfig) {
   const monitoringSettings = generateMonitoringSettingsInfo(globalConfig);
 
   return {
-    service_id: process.env.EMAILJS_SERVICE_ID,
-    template_id: process.env.EMAILJS_TEMPLATE_ID,
-    user_id: process.env.EMAILJS_PUBLIC_KEY,
+    // 移除固定配置，让 sendEmailJS 函数处理配置选择
     template_params: {
       to_email: groupAlertData.group_email,
       subject: title,
