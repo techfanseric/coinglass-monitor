@@ -542,12 +542,10 @@ class ConfigManager {
 
         // 检查配置是否真的发生了变化
         if (!this.hasConfigChanged(config)) {
-            console.log('🔄 配置未发生变化，跳过保存');
             return; // 配置未变化，直接返回
         }
 
-        console.log('💾 检测到配置变化，开始保存');
-
+  
         // 移除全局监控状态检查，改为组级别控制
 
         try {
@@ -1066,11 +1064,8 @@ class ConfigManager {
 
             // 检查状态是否真的发生了变化
             if (previousState === isEnabled) {
-                console.log(`🔄 邮件组状态未发生变化，跳过更新: ${groupId}, 状态: ${isEnabled}`);
                 return;
             }
-
-            console.log(`🔄 邮件组状态变化: ${groupId}, ${previousState} -> ${isEnabled}`);
 
             // 如果尝试启用组，检查是否满足条件
             if (isEnabled) {
@@ -1107,12 +1102,10 @@ class ConfigManager {
 
                 // 所有条件满足，启用邮件组
                 group.enabled = true;
-                console.log(`邮件组启用 - 组ID: ${groupId}, 邮箱: ${email}`);
 
             } else {
                 // 用户主动禁用邮件组
                 group.enabled = false;
-                console.log(`邮件组禁用 - 组ID: ${groupId}`);
             }
 
           // 更新状态徽章显示
@@ -1124,6 +1117,13 @@ class ConfigManager {
 
             // 更新菜单按钮文字
             this.updateGroupMenuButton(groupId, isEnabled);
+
+            // 延迟一小段时间重新渲染，给后端状态更新时间
+            setTimeout(() => {
+                this.renderEmailGroups().catch(error => {
+                    console.error('重新渲染界面失败:', error);
+                });
+            }, 500); // 延迟500ms给后端状态更新时间
 
             // 自动保存配置
             this.autoSaveConfig();
@@ -1250,7 +1250,12 @@ class ConfigManager {
                             const nextTriggerInfo = coinState.next_trigger_info;
 
                             // 新的状态显示逻辑 - 使用后端计算的下次触发时间
-                            const getStatusDisplay = (coinState, nextTriggerInfo) => {
+                            const getStatusDisplay = (coinState, nextTriggerInfo, groupEnabled) => {
+                                // 如果分组禁用，不显示任何时间信息
+                                if (!groupEnabled) {
+                                    return '';
+                                }
+
                                 // 优先级：冷却期 > 触发时间
                                 if (nextTriggerInfo && nextTriggerInfo.reason === 'in_cooling') {
                                     return nextTriggerInfo.displayText;
@@ -1348,7 +1353,7 @@ class ConfigManager {
                                 return { rateText: `${currentRate}%`, comparisonText: comparisonSymbol, timeText, showIcon, hasData: true };
                             };
 
-                            const statusDisplay = getStatusDisplay(coinState, nextTriggerInfo);
+                            const statusDisplay = getStatusDisplay(coinState, nextTriggerInfo, group.enabled !== false);
 
                             // 判断是否显示冷却期重置选项
                             const isInCooldown = coinState.status === 'alert' && coinState.next_notification && new Date(coinState.next_notification) > new Date();
@@ -1476,11 +1481,8 @@ class ConfigManager {
 
         // 检查邮箱是否真的发生了变化
         if (oldEmail === trimmedEmail) {
-            console.log(`🔄 邮箱地址未发生变化，跳过更新: ${trimmedEmail}`);
             return;
         }
-
-        console.log(`📧 更新邮箱地址: ${oldEmail} -> ${trimmedEmail}`);
         group.email = trimmedEmail;
 
         // 邮箱验证 - 仅标记状态，不修改内容

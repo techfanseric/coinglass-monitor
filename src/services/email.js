@@ -727,11 +727,10 @@ async function sendEmailJS(emailData) {
     return false;
   }
 
-  console.log(`📧 尝试使用 ${configs.length} 个邮件配置发送邮件`);
+  console.log(`📧 邮件发送中...`);
 
   for (let i = 0; i < configs.length; i++) {
     const config = configs[i];
-    console.log(`📧 尝试使用第 ${i + 1} 个邮件配置发送...`);
 
     try {
       // EmailJS API调用参数 - 使用当前配置
@@ -766,27 +765,22 @@ async function sendEmailJS(emailData) {
 
       if (response.status === 200) {
         if (i > 0) {
-          console.log(`✅ 第 ${i + 1} 个邮件配置发送成功（前 ${i} 个配置失败）`);
+          console.log(`✅ 使用配置${i + 1}发送成功（跳过${i}个失效配置）`);
         } else {
-          console.log(`✅ 第 1 个邮件配置发送成功`);
+          console.log(`✅ 使用配置1发送成功`);
         }
         return true;
       } else {
         const errorText = await response.text();
-        console.error(`❌ 第 ${i + 1} 个邮件配置发送失败:`, response.status, errorText);
 
         // 如果不是最后一个配置，继续尝试下一个
         if (i < configs.length - 1) {
-          console.log(`🔄 切换到下一个邮件配置...`);
           continue;
         }
       }
     } catch (error) {
-      console.error(`❌ 第 ${i + 1} 个邮件配置发送异常:`, error);
-
       // 如果不是最后一个配置，继续尝试下一个
       if (i < configs.length - 1) {
-        console.log(`🔄 切换到下一个邮件配置...`);
         continue;
       }
     }

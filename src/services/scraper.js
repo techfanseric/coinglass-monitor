@@ -47,8 +47,25 @@ export class ScraperService {
    * 初始化浏览器
    */
   async initBrowser() {
+    // 检查现有浏览器实例是否仍然可用
     if (this.browser) {
-      return this.browser;
+      try {
+        // 检查浏览器连接是否还活着
+        const isConnected = this.browser.isConnected();
+        if (isConnected) {
+          return this.browser;
+        } else {
+          // 浏览器已断开连接，清理并重新创建
+          console.log('🔄 检测到浏览器连接已断开，重新创建...');
+          this.browser = null;
+          this.page = null;
+        }
+      } catch (error) {
+        // 检查连接状态时出错，认为实例不可用
+        console.log('🔄 浏览器实例状态异常，重新创建...');
+        this.browser = null;
+        this.page = null;
+      }
     }
 
     console.log('🌐 启动 Puppeteer 浏览器...');

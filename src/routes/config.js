@@ -10,6 +10,131 @@ import { formatDateTime } from '../utils/time-utils.js';
 const router = express.Router();
 
 /**
+ * 检测配置变化
+ */
+function detectConfigChanges(oldConfig, newConfig) {
+  const changes = [];
+
+  if (!oldConfig || !newConfig) {
+    return changes;
+  }
+
+  // 检测触发时间变化
+  const oldTrigger = oldConfig.trigger_settings || {};
+  const newTrigger = newConfig.trigger_settings || {};
+
+  if (oldTrigger.hourly_minute !== newTrigger.hourly_minute) {
+    changes.push(`每小时触发时间: ${oldTrigger.hourly_minute}分 → ${newTrigger.hourly_minute}分`);
+  }
+
+  if (oldTrigger.daily_time !== newTrigger.daily_time) {
+    changes.push(`每天触发时间: ${oldTrigger.daily_time || '未设置'} → ${newTrigger.daily_time || '未设置'}`);
+  }
+
+  // 检测通知时间窗口变化
+  const oldNotification = oldConfig.notification_hours || {};
+  const newNotification = newConfig.notification_hours || {};
+
+  if (oldNotification.enabled !== newNotification.enabled) {
+    changes.push(`通知时间限制: ${oldNotification.enabled ? '启用' : '禁用'} → ${newNotification.enabled ? '启用' : '禁用'}`);
+  }
+
+  if (oldNotification.start !== newNotification.start || oldNotification.end !== newNotification.end) {
+    const oldRange = oldNotification.enabled ? `${oldNotification.start}-${oldNotification.end}` : '全天';
+    const newRange = newNotification.enabled ? `${newNotification.start}-${newNotification.end}` : '全天';
+    changes.push(`通知时间窗口: ${oldRange} → ${newRange}`);
+  }
+
+  // 检测重复间隔变化
+  if (oldConfig.repeat_interval !== newConfig.repeat_interval) {
+    changes.push(`重复间隔: ${oldConfig.repeat_interval || 180}分钟 → ${newConfig.repeat_interval || 180}分钟`);
+  }
+
+  // 检测邮件分组变化
+  const oldGroups = oldConfig.email_groups || [];
+  const newGroups = newConfig.email_groups || [];
+
+  // 检查新增的分组
+  for (const newGroup of newGroups) {
+    const oldGroup = oldGroups.find(g => g.id === newGroup.id);
+    if (!oldGroup) {
+      changes.push(`新增邮件分组: ${newGroup.name}`);
+    }
+  }
+
+  // 检查删除的分组
+  for (const oldGroup of oldGroups) {
+    const newGroup = newGroups.find(g => g.id === oldGroup.id);
+    if (!newGroup) {
+      changes.push(`删除邮件分组: ${oldGroup.name}`);
+    }
+  }
+
+  // 检查修改的分组
+  for (const newGroup of newGroups) {
+    const oldGroup = oldGroups.find(g => g.id === newGroup.id);
+    if (oldGroup) {
+      // 检查邮箱变化
+      if (oldGroup.email !== newGroup.email) {
+        changes.push(`${newGroup.name}邮箱: ${oldGroup.email || '空'} → ${newGroup.email || '空'}`);
+      }
+
+      // 检查启用状态变化
+      if (oldGroup.enabled !== newGroup.enabled) {
+        changes.push(`${newGroup.name}状态: ${oldGroup.enabled ? '启用' : '禁用'} → ${newGroup.enabled ? '启用' : '禁用'}`);
+      }
+
+      // 检查币种变化
+      const oldCoins = oldGroup.coins || [];
+      const newCoins = newGroup.coins || [];
+
+      // 新增币种
+      for (const newCoin of newCoins) {
+        const oldCoin = oldCoins.find(c =>
+          c.symbol === newCoin.symbol &&
+          c.exchange === newCoin.exchange &&
+          c.timeframe === newCoin.timeframe
+        );
+        if (!oldCoin) {
+          changes.push(`${newGroup.name}新增币种: ${newCoin.exchange}-${newCoin.symbol}(${newCoin.timeframe}) 阈值:${newCoin.threshold}%`);
+        }
+      }
+
+      // 删除币种
+      for (const oldCoin of oldCoins) {
+        const newCoin = newCoins.find(c =>
+          c.symbol === oldCoin.symbol &&
+          c.exchange === oldCoin.exchange &&
+          c.timeframe === oldCoin.timeframe
+        );
+        if (!newCoin) {
+          changes.push(`${newGroup.name}删除币种: ${oldCoin.exchange}-${oldCoin.symbol}(${oldCoin.timeframe})`);
+        }
+      }
+
+      // 修改币种
+      for (const newCoin of newCoins) {
+        const oldCoin = oldCoins.find(c =>
+          c.symbol === newCoin.symbol &&
+          c.exchange === newCoin.exchange &&
+          c.timeframe === newCoin.timeframe
+        );
+        if (oldCoin) {
+          if (oldCoin.threshold !== newCoin.threshold) {
+            changes.push(`${newGroup.name}修改${newCoin.exchange}-${newCoin.symbol}阈值: ${oldCoin.threshold}% → ${newCoin.threshold}%`);
+          }
+          if (oldCoin.enabled !== newCoin.enabled) {
+            changes.push(`${newGroup.name}修改${newCoin.exchange}-${newCoin.symbol}状态: ${oldCoin.enabled ? '启用' : '禁用'} → ${newCoin.enabled ? '启用' : '禁用'}`);
+          }
+        }
+      }
+    }
+  }
+
+  return changes;
+}
+
+/**
  * 验证时间字符串格式
  */
 function validateTimeFormat(timeStr) {
@@ -150,10 +275,11 @@ router.get('/', async (req, res) => {
  */
 router.post('/', async (req, res) => {
   try {
-    console.log('💾 请求保存用户配置');
-    console.log('📊 配置数据:', JSON.stringify(req.body, null, 2));
-
     const config = req.body;
+
+    // 获取当前配置进行比较，检测变化
+    const currentConfig = await storageService.getConfig();
+    const changes = detectConfigChanges(currentConfig, config);
 
     // 验证配置格式
     if (!config || typeof config !== 'object') {
@@ -225,9 +351,12 @@ router.post('/', async (req, res) => {
     const success = await storageService.saveConfig(modifiedConfig);
 
     if (success) {
-      console.log('✅ 配置保存成功');
-      console.log('📧 邮件分组数量:', modifiedConfig.email_groups?.length || 0);
-      console.log('💾 保存的配置结构:', Object.keys(modifiedConfig));
+      // 显示具体变化，而不是整个配置
+      if (changes.length > 0) {
+        console.log(`✅ 配置更新: ${changes.join(' | ')}`);
+      } else {
+        console.log(`✅ 配置保存: 无实际变化`);
+      }
 
       res.json({
         success: true,
