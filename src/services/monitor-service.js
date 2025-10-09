@@ -1744,10 +1744,22 @@ async function processGroupNotificationsOnly(group, globalConfig, allScrapedData
     for (const coin of enabledCoins) {
       const normalizedExchange = normalizeExchangeName(coin.exchange);
         const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
-      const coinData = allScrapedData.allCoinsData?.[coinKey];
+
+      // 修复数据访问路径：allScrapedData 直接包含 allCoinsData
+      const coinData = allScrapedData.allCoinsData?.[coinKey] || allScrapedData[coinKey];
 
       if (!coinData) {
-        console.warn(`⚠️ 币种 ${coin.symbol} 数据不存在，跳过阈值检查`);
+        // 检查是否是冷却期内的币种
+        const groupState = await storageService.getGroupState(group.id);
+        const coinState = groupState.coin_states?.[coinKey];
+
+        if (coinState && coinState.status === 'alert') {
+          const nextNotificationTime = new Date(coinState.next_notification);
+          const remainingTime = Math.ceil((nextNotificationTime - new Date()) / (1000 * 60));
+          console.log(`  - ${coin.symbol}: 跳过阈值检查，仍在冷却期内，距离下次通知还有 ${remainingTime} 分钟`);
+        } else {
+          console.log(`  - ${coin.symbol}: 跳过阈值检查，该币种未在本次抓取范围内`);
+        }
         continue;
       }
 
@@ -1777,7 +1789,7 @@ async function processGroupNotificationsOnly(group, globalConfig, allScrapedData
       const emailSuccess = await emailService.sendGroupAlert(
         group,
         triggeredCoins,
-        allScrapedData.allCoinsData,
+        allScrapedData.allCoinsData || allScrapedData,
         globalConfig
       );
 
