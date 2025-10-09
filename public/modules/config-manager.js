@@ -1311,7 +1311,7 @@ class ConfigManager {
                             const getRateDisplay = (coinState, coin) => {
                                 const currentRate = coinState.last_rate;
                                 if (currentRate === null || currentRate === undefined) {
-                                    return null; // 无数据时不显示
+                                    return { rateText: null, comparisonText: '', timeText: '', showIcon: '', hasData: false }; // 无数据时不显示
                                 }
 
                                 // 格式化时间 - 优先使用last_notification，其次使用updated_at
@@ -1329,26 +1329,23 @@ class ConfigManager {
                                     timeText = timeStr;
                                 }
 
-                                // 判断比较关系
+                                // 判断比较关系 - 始终基于实际数值比较
                                 const threshold = coin.threshold;
                                 let comparisonSymbol = '';
 
-                                if (coinState.status === 'alert') {
-                                    // 警报状态 - 肯定超过了阈值
+                                // 始终使用实际数值进行比较，确保显示逻辑正确
+                                if (currentRate > threshold) {
                                     comparisonSymbol = '>';
                                     showIcon = '🚨 ';
+                                } else if (currentRate < threshold) {
+                                    comparisonSymbol = '<';
+                                    showIcon = '';
                                 } else {
-                                    // 正常状态 - 需要比较实际数值
-                                    if (currentRate > threshold) {
-                                        comparisonSymbol = '>';
-                                    } else if (currentRate < threshold) {
-                                        comparisonSymbol = '<';
-                                    } else {
-                                        comparisonSymbol = '=';
-                                    }
+                                    comparisonSymbol = '=';
+                                    showIcon = '';
                                 }
 
-                                return { rateText: `${currentRate}%`, comparisonText: comparisonSymbol, timeText, showIcon };
+                                return { rateText: `${currentRate}%`, comparisonText: comparisonSymbol, timeText, showIcon, hasData: true };
                             };
 
                             const statusDisplay = getStatusDisplay(coinState, nextTriggerInfo);
@@ -1367,7 +1364,7 @@ class ConfigManager {
                                     ${statusDisplay ? `<span style="color: #718096; font-size: 0.9em; margin-left: 8px;">${statusDisplay}</span>` : ''}
                                     <br>
                                     <span style="color: #718096; font-size: 0.9em;">
-                                        ${displayInfo ? `${displayInfo.showIcon}${displayInfo.timeText}: ${displayInfo.rateText} ${displayInfo.comparisonText} 阈值: ${coin.threshold}% | ` : `阈值: ${coin.threshold}% | `}颗粒度: ${coin.timeframe === '24h' ? '24小时' : '每小时'}
+                                        ${displayInfo.hasData ? `${displayInfo.showIcon}${displayInfo.timeText}: ${displayInfo.rateText} ${displayInfo.comparisonText} 阈值: ${coin.threshold}% | ` : `阈值: ${coin.threshold}% | `}颗粒度: ${coin.timeframe === '24h' ? '24小时' : '每小时'}
                                     </span>
                                 </span>
                                 <div class="coin-actions">
