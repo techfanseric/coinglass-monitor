@@ -7,7 +7,7 @@ import express from 'express';
 import path from 'path';
 import { storageService } from '../services/storage.js';
 import { loggerService } from '../services/logger.js';
-import { formatDateTime } from '../utils/time-utils.js';
+import { formatDateTime, normalizeExchangeName } from '../utils/time-utils.js';
 
 const router = express.Router();
 
@@ -29,16 +29,25 @@ router.get('/', async (req, res) => {
       // 检查是否使用新的分组格式
       if (config.email_groups && config.email_groups.length > 0) {
         // 使用分组监控格式
+        // 导入监控服务以使用计算函数
+        const { monitorService } = await import('../services/monitor-service.js');
+
         for (const group of config.email_groups) {
           const groupState = await storageService.getGroupState(group.id);
 
           for (const coin of group.coins) {
-            const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+            // 使用标准化交易所名称确保一致性
+            const normalizedExchange = normalizeExchangeName(coin.exchange);
+            const coinStateKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
             const coinState = groupState.coin_states?.[coinStateKey] || { status: 'normal' };
+
+            // 计算下次触发时间
+            const nextTriggerInfo = await monitorService.calculateNextTriggerTime(coin, group, config);
 
             coinStates[coinStateKey] = {
               ...coinState,
-              last_rate: coinState.last_rate
+              last_rate: coinState.last_rate,
+              next_trigger_info: nextTriggerInfo
             };
 
             // 添加到币种数组（用于前端兼容性）
@@ -475,11 +484,14 @@ router.post('/cooldown/reset', async (req, res) => {
 
     let coinState = null;
     let success = false;
+    let resetTime = null;
+    let newNextNotification = null;
 
     // 如果提供了分组信息，优先使用分组监控格式
     if (groupId && exchange && timeframe) {
       const groupState = await storageService.getGroupState(groupId);
-      const coinStateKey = `${coinSymbol}_${exchange}_${timeframe}`;
+      const normalizedExchange = normalizeExchangeName(exchange);
+      const coinStateKey = `${coinSymbol}_${normalizedExchange}_${timeframe}`;
       coinState = groupState.coin_states?.[coinStateKey];
 
       if (!coinState || coinState.status !== 'alert') {
@@ -495,13 +507,15 @@ router.post('/cooldown/reset', async (req, res) => {
       // 重置冷却期：将next_notification设置为当前时间前1分钟
       const now = new Date();
       const pastTime = new Date(now.getTime() - 60 * 1000); // 1分钟前
+      resetTime = formatDateTime(now);
+      newNextNotification = formatDateTime(pastTime);
 
       const updatedState = {
         ...coinState,
-        next_notification: formatDateTime(pastTime),
-        cooldown_reset_at: formatDateTime(now),
+        next_notification: newNextNotification,
+        cooldown_reset_at: resetTime,
         cooldown_reset_by: 'manual',
-        updated_at: formatDateTime(now)
+        updated_at: resetTime
       };
 
       // 更新分组状态中的币种状态
@@ -509,7 +523,7 @@ router.post('/cooldown/reset', async (req, res) => {
       success = await storageService.updateGroupState(groupId, 'alert', groupState);
 
       if (success) {
-        console.log(`✅ 分组币种 ${coinSymbol} (${exchange}/${timeframe}) 冷却期已重置，下次通知时间: ${formatDateTime(pastTime)}`);
+        console.log(`✅ 分组币种 ${coinSymbol} (${exchange}/${timeframe}) 冷却期已重置，下次通知时间: ${newNextNotification}`);
       }
     } else {
       // 向下兼容：使用旧的单一币种格式
@@ -528,19 +542,21 @@ router.post('/cooldown/reset', async (req, res) => {
       // 重置冷却期：将next_notification设置为当前时间前1分钟
       const now = new Date();
       const pastTime = new Date(now.getTime() - 60 * 1000); // 1分钟前
+      resetTime = formatDateTime(now);
+      newNextNotification = formatDateTime(pastTime);
 
       const updatedState = {
         ...coinState,
-        next_notification: formatDateTime(pastTime),
-        cooldown_reset_at: formatDateTime(now),
+        next_notification: newNextNotification,
+        cooldown_reset_at: resetTime,
         cooldown_reset_by: 'manual',
-        updated_at: formatDateTime(now)
+        updated_at: resetTime
       };
 
       success = await storageService.updateCoinState(coinSymbol, 'alert', updatedState);
 
       if (success) {
-        console.log(`✅ 币种 ${coinSymbol} 冷却期已重置，下次通知时间: ${formatDateTime(pastTime)}`);
+        console.log(`✅ 币种 ${coinSymbol} 冷却期已重置，下次通知时间: ${newNextNotification}`);
       }
     }
 
@@ -551,8 +567,8 @@ router.post('/cooldown/reset', async (req, res) => {
         data: {
           coinSymbol,
           previous_next_notification: coinState.next_notification,
-          new_next_notification: formatDateTime(pastTime),
-          reset_at: formatDateTime(now)
+          new_next_notification: newNextNotification,
+          reset_at: resetTime
         },
         timestamp: formatDateTime(new Date())
       });

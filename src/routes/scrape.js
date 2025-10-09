@@ -33,6 +33,21 @@ router.post('/coinglass', async (req, res) => {
       });
     }
 
+    // 检测自动监控是否运行中
+    const { getAutoMonitoringStatus } = await import('../services/monitor-service.js');
+    const autoStatus = getAutoMonitoringStatus();
+
+    if (autoStatus.running) {
+      console.log('⚠️ 自动监控正在运行，拒绝手动触发');
+      return res.json({
+        success: false,
+        error: 'AUTO_MONITORING_RUNNING',
+        message: '自动监控正在运行，请稍后再试',
+        debugInfo: '手动触发仅用于调试，请等待自动监控完成',
+        timestamp: formatDateTime(new Date())
+      });
+    }
+
     // 1. 获取用户配置
     const config = await storageService.getConfig();
     if (!config) {
@@ -174,22 +189,36 @@ router.post('/coinglass', async (req, res) => {
             sharedPage                    // 复用页面实例
           );
 
-        // 检查数据是否存在 - 支持简单键和复合键查找
+        // 检查数据是否存在 - 使用复合键查找
         let foundCoinData = null;
         if (coinData && coinData.coins) {
-          // 优先尝试简单键匹配
-          foundCoinData = coinData.coins[coin.symbol];
+          // 使用标准化的交易所名称匹配 scraper.js 中的存储格式
+          const { normalizeExchangeName } = await import('../utils/time-utils.js');
+          const normalizedExchange = normalizeExchangeName(coin.exchange);
+          const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
+          foundCoinData = coinData.coins[coinKey];
 
-          // 如果简单键找不到，检查是否已经有复合键数据
+          // 如果复合键找不到，回退到简单键查找（向后兼容）
           if (!foundCoinData) {
-            const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
-            foundCoinData = coinData.coins[coinKey] || coinData.coins[coin.symbol];
+            foundCoinData = coinData.coins[coin.symbol];
+            console.log(`⚠️ 复合键 ${coinKey} 未找到，使用简单键 ${coin.symbol} 查找`);
           }
         }
 
+        // 添加调试信息
+        if (!foundCoinData && coinData && coinData.coins) {
+          const { normalizeExchangeName } = await import('../utils/time-utils.js');
+          const normalizedExchange = normalizeExchangeName(coin.exchange);
+          const expectedKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
+          console.log(`🔍 可用的数据键: ${Object.keys(coinData.coins).join(', ')}`);
+          console.log(`🔍 期望的键: ${expectedKey}`);
+        }
+
         if (foundCoinData) {
-          // 使用复合键存储，避免重复币种覆盖
-          const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+          // 使用复合键存储，避免重复币种覆盖（统一使用标准化交易所名称）
+          const { normalizeExchangeName } = await import('../utils/time-utils.js');
+          const normalizedExchange = normalizeExchangeName(coin.exchange);
+          const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
 
           // 为重复币种创建唯一标识的数据副本
           const coinDataWithMeta = {

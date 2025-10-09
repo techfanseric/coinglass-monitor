@@ -161,7 +161,9 @@ class MonitorUI {
         }
 
         coinsArray.forEach((coin, index) => {
-            const state = data.monitoring_status && data.monitoring_status.coins_state && data.monitoring_status.coins_state[coin.symbol] ? data.monitoring_status.coins_state[coin.symbol] : { status: 'normal' };
+            // 使用复合键名匹配分组监控格式（与后端API保持一致）
+            const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+            const state = data.monitoring_status && data.monitoring_status.coins_state && data.monitoring_status.coins_state[coinStateKey] ? data.monitoring_status.coins_state[coinStateKey] : { status: 'normal' };
             const statusClass = state.status === 'alert' ? '#ef4444' :
                                state.status === 'normal' ? '#10b981' : '#f59e0b';
             const statusText = state.status === 'alert' ? '警报' :
@@ -217,7 +219,7 @@ class MonitorUI {
                             '<button onclick="window.appMonitorUI.toggleMoreMenu(' + index + ')" class="more-btn">⋮</button>' +
                             '<div id="moreMenu_' + index + '" class="more-dropdown">' +
                                 (showCooldownOption ?
-                                    '<button onclick="window.appMonitorUI.togglePause(\'' + coin.symbol + '\', ' + index + ')" class="more-dropdown-item">重置冷却期</button>' : ''
+                                    '<button onclick="window.appMonitorUI.togglePause(\'' + coin.symbol + '\', \'' + coin.group_id + '\', \'' + coin.exchange + '\', \'' + coin.timeframe + '\')" class="more-dropdown-item">重置冷却期</button>' : ''
                                 ) +
                                 '<button onclick="window.appMonitorUI.editMonitor(' + index + ')" class="more-dropdown-item">编辑</button>' +
                                 '<button onclick="window.appMonitorUI.removeMonitor(' + index + ')" class="more-dropdown-item danger">删除</button>' +
@@ -357,6 +359,102 @@ class MonitorUI {
         }
     }
 
+    // 批量重置分组冷却期
+    async resetGroupCooldown(groupId) {
+        // 关闭所有菜单
+        this.closeAllMoreMenus();
+
+        try {
+            const config = window.appState.currentConfig || {};
+            const group = config.email_groups?.find(g => g.id === groupId);
+
+            if (!group || !group.coins || group.coins.length === 0) {
+                window.appUtils?.showAlert?.('分组信息不存在或无监控币种', 'error');
+                return;
+            }
+
+            // 找出所有需要重置冷却期的币种
+            const coinsToReset = [];
+
+            // 获取当前监控状态
+            const statusResponse = await fetch(`${this.apiBase}/api/status`);
+            if (statusResponse.ok) {
+                const statusData = await statusResponse.json();
+                const monitoringStatus = statusData.monitoring_status?.coins_state || {};
+
+                group.coins.forEach(coin => {
+                    const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+                    const coinState = monitoringStatus[coinStateKey];
+
+                    // 检查是否处于警报状态且有冷却期
+                    if (coinState &&
+                        coinState.status === 'alert' &&
+                        coinState.next_notification &&
+                        new Date(coinState.next_notification) > new Date()) {
+                        coinsToReset.push(coin);
+                    }
+                });
+            }
+
+            if (coinsToReset.length === 0) {
+                window.appUtils?.showAlert?.('该分组没有需要重置冷却期的币种', 'info');
+                return;
+            }
+
+            // 确认对话框
+            const coinList = coinsToReset.map(c => `${c.exchange}-${c.symbol}(${c.timeframe})`).join(', ');
+            if (!confirm(`确定要重置以下币种的冷却期吗？\n\n${coinList}\n\n重置后可以立即触发警报通知。`)) {
+                return;
+            }
+
+            // 批量重置冷却期
+            let successCount = 0;
+            for (const coin of coinsToReset) {
+                try {
+                    const response = await fetch(`${this.apiBase}/api/status/cooldown/reset`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            coinSymbol: coin.symbol,
+                            groupId: groupId,
+                            exchange: coin.exchange,
+                            timeframe: coin.timeframe
+                        })
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        if (result.success) {
+                            successCount++;
+                        }
+                    }
+                } catch (error) {
+                    console.error(`重置 ${coin.symbol} 冷却期失败:`, error);
+                }
+            }
+
+            // 刷新状态显示
+            await this.loadStatus();
+            // 同时刷新邮件分组界面以更新冷却状态
+            if (window.appConfig?.renderEmailGroups) {
+                await window.appConfig.renderEmailGroups();
+            }
+
+            // 显示结果
+            if (successCount > 0) {
+                window.appUtils?.showAlert?.(`已成功重置 ${successCount} 个币种的冷却期`, 'success');
+            } else {
+                window.appUtils?.showAlert?.('重置冷却期失败，请重试', 'error');
+            }
+
+        } catch (error) {
+            console.error('批量重置冷却期失败:', error);
+            window.appUtils?.showAlert?.('操作失败，请重试', 'error');
+        }
+    }
+
     // 立即触发监控
     async triggerMonitoring() {
         const triggerBtn = document.getElementById('triggerBtn');
@@ -460,10 +558,27 @@ class MonitorUI {
                     throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
                 }
                 scrapeCompleted = true;
-            }).catch(error => {
+            }).catch(async error => {
                 console.error('触发监控失败:', error);
                 scrapeCompleted = true;
-                this.handleScrapeError(error);
+
+                // 尝试解析错误响应
+                let errorData = error;
+                try {
+                    const errorResponse = await fetch(`${this.apiBase}/api/scrape/coinglass`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({})
+                    }).catch(() => null);
+
+                    if (errorResponse && !errorResponse.ok) {
+                        errorData = await errorResponse.json().catch(() => ({ error: 'Network error' }));
+                    }
+                } catch (parseError) {
+                    // 解析失败，使用原始错误
+                }
+
+                this.handleScrapeError(errorData);
             });
 
         } catch (error) {
@@ -645,6 +760,20 @@ class MonitorUI {
         triggerStatus.textContent = '检查失败';
         triggerBtn.textContent = '✗';
         triggerBtn.style.color = '#ef4444';
+
+        // 处理自动监控冲突的特殊情况
+        if (error.error === 'AUTO_MONITORING_RUNNING') {
+            // 显示友好的冲突提示
+            this.updateRealtimeLog({ logs: ['⚠️ 自动监控正在运行，请稍后再试'] });
+            triggerStatus.textContent = '自动监控运行中';
+
+            // 3秒后恢复按钮状态并隐藏日志
+            setTimeout(() => {
+                this.resetTriggerButton();
+                this.hideRealtimeLog();
+            }, 3000);
+            return;
+        }
 
         window.appUtils?.showAlert?.(`触发监控失败: ${error.message}`, 'error');
 

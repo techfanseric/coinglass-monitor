@@ -141,3 +141,40 @@ export function parseDateTime(timeString) {
   // 默认尝试解析
   return new Date(timeString);
 }
+
+/**
+ * 标准化交易所名称
+ * @param {string} exchange - 交易所名称
+ * @returns {string} 标准化后的交易所名称
+ */
+export function normalizeExchangeName(exchange) {
+  if (!exchange || typeof exchange !== 'string') {
+    return exchange;
+  }
+
+  const normalized = exchange.toLowerCase();
+  switch (normalized) {
+    case 'binance': return 'Binance';
+    case 'okx': return 'OKX';
+    case 'bybit': return 'Bybit';
+    case 'huobi': return 'Huobi';
+    case 'kucoin': return 'KuCoin';
+    case 'mexc': return 'MEXC';
+    case 'gate.io':
+    case 'gate':
+      return 'Gate.io';
+    case 'bitget': return 'Bitget';
+    case 'crypto.com':
+    case 'crypto':
+      return 'Crypto.com';
+    case 'coinbase': return 'Coinbase';
+    case 'kraken': return 'Kraken';
+    case 'ftx': return 'FTX';
+    case 'bitfinex': return 'Bitfinex';
+    case 'bittrex': return 'Bittrex';
+    case 'poloniex': return 'Poloniex';
+    default:
+      // 对于未知交易所，首字母大写其余小写
+      return exchange.charAt(0).toUpperCase() + exchange.slice(1).toLowerCase();
+  }
+}

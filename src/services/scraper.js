@@ -153,7 +153,8 @@ export class ScraperService {
 
       for (const targetCoin of coinsToScrape) {
         // 为重复币种创建唯一标识符（基于交易所和时间框架）
-        const coinKey = `${targetCoin}_${exchange}_${timeframe}`;
+        // 使用小写交易所名称，与页面内部逻辑保持一致
+        const coinKey = `${targetCoin}_${exchange.toLowerCase()}_${timeframe}`;
         await this.switchCoin(usePage, targetCoin);
         // 等待页面数据更新，特别是切换币种后需要更长时间
         await usePage.waitForTimeout(this.config.waitTimes.coin);
@@ -195,12 +196,19 @@ export class ScraperService {
         console.log(`📊 提取 ${targetCoin} 数据...`);
         const extractedData = await this.extractTableData(usePage, exchange, targetCoin);
 
-        if (extractedData && extractedData.coins && extractedData.coins[targetCoin]) {
+        // 导入标准化函数
+        const { normalizeExchangeName } = await import('../utils/time-utils.js');
+        const normalizedExchange = normalizeExchangeName(exchange);
+
+        // 使用标准化的复合键查找数据（大写币种，标准化交易所）
+        const actualCoinKey = `${targetCoin}_${normalizedExchange}_${timeframe}`;
+
+        if (extractedData && extractedData.coins && extractedData.coins[actualCoinKey]) {
           console.log(`📊 成功提取真实数据: 找到 ${Object.keys(extractedData.coins).length} 个币种`);
 
           // 为重复币种创建唯一标识的数据副本
           const coinDataWithKey = {
-            ...extractedData.coins[targetCoin],
+            ...extractedData.coins[actualCoinKey],
             exchange: exchange,
             timeframe: timeframe,
             coin_key: coinKey,
@@ -209,20 +217,13 @@ export class ScraperService {
           };
 
           // 对于重复币种，优先使用复合键存储，避免数据覆盖
-          allCoinsData[coinKey] = coinDataWithKey;
-          console.log(`💾 存储复合键数据: ${coinKey} -> 利率 ${coinDataWithKey.annual_rate}%, 历史数据 ${coinDataWithKey.history?.length || 0} 条...`);
-
-          // 复合键存储已经完成，不再创建币种符号副本
-          // 这确保数据的唯一性和正确性，避免复合键被简单键覆盖
-
-          // 验证复合键数据是否正确存储
-          if (!allCoinsData[coinKey]) {
-            console.error(`❌ 错误: 复合键 ${coinKey} 存储失败`);
-          }
-
-          // 原来的成功日志位置（已删除）
+          allCoinsData[actualCoinKey] = coinDataWithKey;
+          console.log(`💾 存储复合键数据: ${actualCoinKey} -> 利率 ${coinDataWithKey.annual_rate}%, 历史数据 ${coinDataWithKey.history?.length || 0} 条...`);
+          console.log(`✅ ${targetCoin} 数据抓取成功`);
         } else {
-          console.warn(`⚠️ ${targetCoin} 数据提取失败`);
+          console.warn(`⚠️ ${targetCoin} 数据抓取失败`);
+          console.log(`🔍 可用的数据键: ${extractedData?.coins ? Object.keys(extractedData.coins).join(', ') : '无'}`);
+          console.log(`🔍 期望的键: ${actualCoinKey}`);
         }
       }
 
@@ -1123,7 +1124,7 @@ export class ScraperService {
       const data = await page.evaluate((expectedExchange, expectedCoin) => {
         // 获取页面标题和当前配置
         const pageTitle = document.title;
-        let currentExchange = expectedExchange.toLowerCase();
+        let currentExchange = expectedExchange;
 
         console.log(`🔍 页面内分析: 预期交易所 ${expectedExchange}, 主要币种 ${expectedCoin}, 页面标题: ${pageTitle}`);
 
@@ -1135,6 +1136,7 @@ export class ScraperService {
           const titleExchange = engMatch[1].toLowerCase();
           const titleCoin = engMatch[2].toUpperCase();
           console.log(`📋 标题解析: ${titleExchange}/${titleCoin}`);
+          currentExchange = titleExchange; // 使用页面标题中的交易所
           currentCoin = titleCoin; // 使用页面标题中的币种
         }
 
@@ -1199,14 +1201,25 @@ export class ScraperService {
                   hourly_rate: hourlyRateMatch ? parseFloat(hourlyRateMatch[1]) : (rate / 365 / 24)
                 };
 
-                // 使用传入的期望币种作为数据标识，而不是依赖页面标题解析
-                const targetCoin = expectedCoin.toUpperCase();
+                // 使用复合键作为数据标识，确保数据唯一性
+                // 从页面标题或URL推断时间框架，默认为1h
+                const pageUrl = window.location.href;
+                let actualTimeframe = '1h'; // 默认值
+                if (pageUrl.includes('24h') || document.title.includes('24')) {
+                  actualTimeframe = '24h';
+                }
+
+                // 使用页面实际解析的交易所名称（与查找逻辑保持一致）
+                const coinKey = `${expectedCoin.toUpperCase()}_${currentExchange}_${actualTimeframe}`;
 
                 // 只为当前请求的币种创建数据
-                if (!allCoinsData[targetCoin]) {
-                  console.log(`🆕 创建币种数据: ${targetCoin}, 首个利率: ${rate}%`);
-                  allCoinsData[targetCoin] = {
-                    symbol: targetCoin,
+                if (!allCoinsData[coinKey]) {
+                  console.log(`🆕 创建复合键数据: ${coinKey}, 首个利率: ${rate}%`);
+                  allCoinsData[coinKey] = {
+                    symbol: expectedCoin.toUpperCase(),
+                    exchange: expectedExchange,
+                    timeframe: actualTimeframe,
+                    coin_key: coinKey,
                     annual_rate: rate,
                     daily_rate: dataPoint.daily_rate,
                     hourly_rate: dataPoint.hourly_rate,
@@ -1215,7 +1228,7 @@ export class ScraperService {
                   };
                 }
 
-                allCoinsData[targetCoin].history.push(dataPoint);
+                allCoinsData[coinKey].history.push(dataPoint);
               } else {
                 console.log(`❌ 数据解析失败: ${timeText} | ${annualRateText} | ${dailyRateText} | ${hourlyRateText}`);
               }

@@ -5,7 +5,7 @@
 
 import { storageService } from './storage.js';
 import { loggerService } from './logger.js';
-import { formatDateTime, formatDateTimeCN } from '../utils/time-utils.js';
+import { formatDateTime, formatDateTimeCN, normalizeExchangeName } from '../utils/time-utils.js';
 
 // 从环境变量加载配置
 const emailConfig = {
@@ -872,8 +872,33 @@ export async function sendGroupAlert(group, triggeredCoins, allCoinsData, global
 
     if (success) {
       console.log(`✅ 邮件发送成功: ${group.name} -> ${triggeredCoins.map(c => `${c.symbol}(${c.current_rate}%)`).join(', ')}`);
+
       // 记录发送历史
       await storageService.recordEmailHistory(groupAlertData);
+
+      // 更新分组状态中每个币种的状态
+      const now = new Date();
+      const groupState = await storageService.getGroupState(group.id);
+
+      if (!groupState.coin_states) {
+        groupState.coin_states = {};
+      }
+
+      for (const coin of triggeredCoins) {
+        const normalizedExchange = normalizeExchangeName(coin.exchange);
+        const coinStateKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
+        groupState.coin_states[coinStateKey] = {
+          status: 'alert',
+          last_notification: formatDateTime(now),
+          next_notification: formatDateTime(new Date(now.getTime() + (globalConfig.repeat_interval || 180) * 60 * 1000)),
+          last_rate: coin.current_rate,
+          updated_at: formatDateTime(now)
+        };
+        console.log(`💾 更新分组 ${group.name} 币种 ${coin.symbol} 状态为 alert，下次通知时间：${groupState.coin_states[coinStateKey].next_notification}`);
+      }
+
+      await storageService.updateGroupState(group.id, 'alert', groupState);
+      console.log(`✅ 分组 ${group.name} 状态更新完成`);
     } else {
       console.error(`❌ 邮件发送失败: ${group.name}`);
     }

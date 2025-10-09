@@ -313,7 +313,7 @@ class ConfigManager {
 
         // 填充触发时间设置
         if (config.trigger_settings) {
-            document.getElementById('hourlyMinute').value = config.trigger_settings.hourly_minute || 5;
+            document.getElementById('hourlyMinute').value = config.trigger_settings.hourly_minute !== undefined ? config.trigger_settings.hourly_minute : 5;
             document.getElementById('dailyTime').value = config.trigger_settings.daily_time || '09:05';
         }
 
@@ -415,7 +415,7 @@ class ConfigManager {
             repeat_interval: parseInt(document.getElementById('repeatInterval').value),
             // 移除全局监控开关，改为组级别控制
             trigger_settings: {
-                hourly_minute: parseInt(document.getElementById('hourlyMinute').value) || 5,
+                hourly_minute: parseInt(document.getElementById('hourlyMinute').value) !== undefined ? parseInt(document.getElementById('hourlyMinute').value) : 5,
                 daily_time: document.getElementById('dailyTime').value || '09:05'
             },
             notification_hours: {
@@ -772,7 +772,7 @@ class ConfigManager {
             if (field === 'repeat_interval' && lastConfig.repeat_interval) {
                 return lastConfig.repeat_interval;
             }
-            if (field === 'hourly_minute' && lastConfig.trigger_settings?.hourly_minute !== undefined) {
+            if (field === 'hourly_minute' && lastConfig.trigger_settings?.hourly_minute !== undefined && lastConfig.trigger_settings?.hourly_minute !== null) {
                 return lastConfig.trigger_settings.hourly_minute;
             }
             if (field === 'daily_time' && lastConfig.trigger_settings?.daily_time) {
@@ -1178,6 +1178,9 @@ class ConfigManager {
                                 <button onclick="window.appConfig.toggleGroupStatus('${group.id}')" class="more-dropdown-item">
                                     ${group.enabled !== false ? '禁用' : '启用'}
                                 </button>
+                                ${this.hasGroupCooldownCoins(group, monitoringStatus) ?
+                                    `<button onclick="window.appMonitorUI.resetGroupCooldown('${group.id}')" class="more-dropdown-item">清除所有冷却期</button>` : ''
+                                }
                                 <button onclick="window.appConfig.renameGroup('${group.id}')" class="more-dropdown-item">重命名</button>
                                 <button onclick="window.appConfig.deleteEmailGroup('${group.id}')" class="more-dropdown-item danger">删除</button>
                             </div>
@@ -1238,12 +1241,27 @@ class ConfigManager {
                         ${group.coins.slice().reverse().map((coin, index) => {
                             const actualIndex = group.coins.length - 1 - index;
 
-                            // 获取币种状态（统一使用小写交易所名称进行匹配）
-                            const coinKey = `${coin.symbol}_${coin.exchange.toLowerCase()}_${coin.timeframe}`;
+                            // 获取币种状态（使用标准化交易所名称匹配后端API格式）
+                            const normalizedExchange = this.normalizeExchangeName(coin.exchange);
+                            const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
                             const coinState = monitoringStatus?.[coinKey] || { status: 'normal' };
 
-                            // 新的冷却期显示逻辑 - 只在冷却时显示
-                            const getCooldownDisplay = (coinState) => {
+                            // 获取后端计算的下次触发时间信息
+                            const nextTriggerInfo = coinState.next_trigger_info;
+
+                            // 新的状态显示逻辑 - 使用后端计算的下次触发时间
+                            const getStatusDisplay = (coinState, nextTriggerInfo) => {
+                                // 优先级：冷却期 > 触发时间
+                                if (nextTriggerInfo && nextTriggerInfo.reason === 'in_cooling') {
+                                    return nextTriggerInfo.displayText;
+                                }
+
+                                // 正常状态或可以立即触发时，显示下次检查时间
+                                if (nextTriggerInfo && nextTriggerInfo.displayText) {
+                                    return nextTriggerInfo.displayText;
+                                }
+
+                                // 兜容旧逻辑（如果API没有返回next_trigger_info）
                                 if (coinState.status === 'alert' && coinState.next_notification) {
                                     const now = new Date();
                                     const nextTime = new Date(coinState.next_notification);
@@ -1261,42 +1279,95 @@ class ConfigManager {
                                         }
                                     }
                                 }
-                                // 正常状态或可以立即通知时，不显示任何内容
+
+                                // 正常状态，不显示任何内容
                                 return '';
                             };
 
-                            // 新的利率栏显示逻辑 - 包含警报信息
-                            const getRateDisplay = (coinState, coin) => {
-                                const currentRate = coinState.last_rate || '--';
+                            // 格式化警报时间显示
+                            const formatAlertTime = (timestamp) => {
+                                const alertTime = new Date(timestamp);
+                                const now = new Date();
 
-                                if (coinState.status === 'alert' && coinState.last_notification) {
-                                    // 警报状态：显示发现时间和利率
-                                    const alertTime = new Date(coinState.last_notification);
-                                    const timeStr = `${alertTime.getHours().toString().padStart(2, '0')}:${alertTime.getMinutes().toString().padStart(2, '0')}`;
-                                    return `🚨 ${timeStr}：${currentRate}%`;
+                                // 判断是否是今天
+                                const isToday = alertTime.toDateString() === now.toDateString();
+                                const isYesterday = alertTime.toDateString() === new Date(now.getTime() - 24 * 60 * 60 * 1000).toDateString();
+
+                                const timeStr = `${alertTime.getHours().toString().padStart(2, '0')}:${alertTime.getMinutes().toString().padStart(2, '0')}`;
+
+                                if (isToday) {
+                                    return timeStr; // 今天只显示时间
+                                } else if (isYesterday) {
+                                    return `昨天 ${timeStr}`; // 昨天显示"昨天"
                                 } else {
-                                    // 正常状态：只显示利率
-                                    return `${currentRate}%`;
+                                    // 其他日期显示月/日
+                                    const month = alertTime.getMonth() + 1;
+                                    const day = alertTime.getDate();
+                                    return `${month}/${day} ${timeStr}`;
                                 }
                             };
 
-                            const cooldownDisplay = getCooldownDisplay(coinState);
+                            // 新的利率栏显示逻辑 - 包含警报信息和时间
+                            const getRateDisplay = (coinState, coin) => {
+                                const currentRate = coinState.last_rate;
+                                if (currentRate === null || currentRate === undefined) {
+                                    return null; // 无数据时不显示
+                                }
+
+                                // 格式化时间 - 优先使用last_notification，其次使用updated_at
+                                let timeToShow = coinState.last_notification || coinState.updated_at;
+                                let timeText = '';
+                                let showIcon = '';
+
+                                if (timeToShow) {
+                                    const formattedTime = formatAlertTime(timeToShow);
+                                    timeText = formattedTime;
+                                } else {
+                                    // 如果没有时间戳，使用当前时间
+                                    const now = new Date();
+                                    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+                                    timeText = timeStr;
+                                }
+
+                                // 判断比较关系
+                                const threshold = coin.threshold;
+                                let comparisonSymbol = '';
+
+                                if (coinState.status === 'alert') {
+                                    // 警报状态 - 肯定超过了阈值
+                                    comparisonSymbol = '>';
+                                    showIcon = '🚨 ';
+                                } else {
+                                    // 正常状态 - 需要比较实际数值
+                                    if (currentRate > threshold) {
+                                        comparisonSymbol = '>';
+                                    } else if (currentRate < threshold) {
+                                        comparisonSymbol = '<';
+                                    } else {
+                                        comparisonSymbol = '=';
+                                    }
+                                }
+
+                                return { rateText: `${currentRate}%`, comparisonText: comparisonSymbol, timeText, showIcon };
+                            };
+
+                            const statusDisplay = getStatusDisplay(coinState, nextTriggerInfo);
 
                             // 判断是否显示冷却期重置选项
                             const isInCooldown = coinState.status === 'alert' && coinState.next_notification && new Date(coinState.next_notification) > new Date();
                             const showCooldownOption = isInCooldown;
 
-                            const rateDisplay = getRateDisplay(coinState, coin);
+  
+                            const displayInfo = getRateDisplay(coinState, coin);
 
                             return `
                             <div class="coin-item-simple">
                                 <span class="coin-text">
                                     <strong>${coin.exchange} - ${coin.symbol}</strong>
-                                    ${cooldownDisplay ? `<span style="color: #718096; font-size: 0.9em; margin-left: 8px;">${cooldownDisplay}</span>` : ''}
+                                    ${statusDisplay ? `<span style="color: #718096; font-size: 0.9em; margin-left: 8px;">${statusDisplay}</span>` : ''}
                                     <br>
                                     <span style="color: #718096; font-size: 0.9em;">
-                                        ${coinState.last_rate !== null && coinState.last_rate !== undefined ? `${rateDisplay} > ` : ''}
-                                        阈值: ${coin.threshold}% | 颗粒度: ${coin.timeframe === '24h' ? '24小时' : '每小时'}
+                                        ${displayInfo ? `${displayInfo.showIcon}${displayInfo.timeText}: ${displayInfo.rateText} ${displayInfo.comparisonText} 阈值: ${coin.threshold}% | ` : `阈值: ${coin.threshold}% | `}颗粒度: ${coin.timeframe === '24h' ? '24小时' : '每小时'}
                                     </span>
                                 </span>
                                 <div class="coin-actions">
@@ -1776,6 +1847,25 @@ class ConfigManager {
                 }
             }
         }
+    }
+
+    // 检查分组是否有币种处于冷却期
+    hasGroupCooldownCoins(group, monitoringStatus) {
+        if (!group.coins || !monitoringStatus) {
+            return false;
+        }
+
+        return group.coins.some(coin => {
+            const normalizedExchange = this.normalizeExchangeName(coin.exchange);
+            const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
+            const coinState = monitoringStatus[coinKey];
+
+            // 检查是否处于警报状态且有冷却期
+            return coinState &&
+                   coinState.status === 'alert' &&
+                   coinState.next_notification &&
+                   new Date(coinState.next_notification) > new Date();
+        });
     }
 }
 

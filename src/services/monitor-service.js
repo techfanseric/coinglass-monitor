@@ -7,7 +7,10 @@ import { storageService } from './storage.js';
 import { emailService } from './email.js';
 import { scraperService } from './scraper.js';
 import { loggerService } from './logger.js';
-import { formatDateTime, formatDateTimeCN } from '../utils/time-utils.js';
+import { formatDateTime, formatDateTimeCN, normalizeExchangeName } from '../utils/time-utils.js';
+
+// 自动监控运行标记（用于冲突检测）
+let autoMonitoringRunning = false;
 
 /**
  * 运行监控逻辑 - 支持邮件分组
@@ -15,7 +18,13 @@ import { formatDateTime, formatDateTimeCN } from '../utils/time-utils.js';
 export async function runMonitoring() {
   const logPrefix = '[监控任务]';
 
+  // 检查是否已有自动监控在运行
+  if (autoMonitoringRunning) {
+    return { success: false, reason: 'already_running' };
+  }
+
   try {
+    autoMonitoringRunning = true;
     // 1. 获取用户配置
     const config = await storageService.getConfig();
     if (!config) {
@@ -46,6 +55,8 @@ export async function runMonitoring() {
   } catch (error) {
     console.error('监控执行异常:', error);
     return { success: false, error: error.message };
+  } finally {
+    autoMonitoringRunning = false;
   }
 }
 
@@ -94,7 +105,8 @@ async function runGroupedMonitoring(config) {
     console.log(`🔄 冷却期检查: ${enabledCoins.length} 个币种...`);
 
     for (const coin of enabledCoins) {
-      const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+      const normalizedExchange = normalizeExchangeName(coin.exchange);
+      const coinStateKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
       const coinState = state.coin_states && state.coin_states[coinStateKey];
 
       if (coinState && coinState.status === 'alert') {
@@ -118,7 +130,7 @@ async function runGroupedMonitoring(config) {
       }
 
       // 需要抓取检查的币种（首次检查或冷却期结束）
-      const coinKey = `${coin.symbol}_${coin.exchange || 'binance'}_${coin.timeframe || '1h'}`;
+      const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe || '1h'}`;
       if (!coinMap.has(coinKey)) {
         coinMap.set(coinKey, {
           ...coin,
@@ -266,7 +278,8 @@ async function processGroupMonitoring(group, globalConfig) {
     console.log(`🔄 冷却期检查: ${enabledCoins.length} 个币种...`);
 
     for (const coin of enabledCoins) {
-      const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+      const normalizedExchange = normalizeExchangeName(coin.exchange);
+      const coinStateKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
       const coinState = state.coin_states && state.coin_states[coinStateKey];
 
       if (coinState && coinState.status === 'alert') {
@@ -356,7 +369,8 @@ async function processGroupMonitoring(group, globalConfig) {
             sharedPage
           );
 
-          const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+          const normalizedExchange = normalizeExchangeName(coin.exchange);
+        const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
 
           if (coinRateData && coinRateData.coins && coinRateData.coins[coinKey]) {
             allCoinsData[coinKey] = coinRateData.coins[coinKey];
@@ -456,7 +470,8 @@ async function processGroupMonitoring(group, globalConfig) {
     const triggeredCoins = [];
 
     for (const coin of coinsToScrape) {
-      const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+      const normalizedExchange = normalizeExchangeName(coin.exchange);
+        const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
       const coinData = allCoinsData[coinKey];
 
       if (!coinData) {
@@ -578,7 +593,8 @@ async function processGroupMonitoring(group, globalConfig) {
  */
 async function checkGroupCoinThreshold(group, coin, currentRate, allCoinsData, globalConfig) {
   // 使用复合键查找币种数据
-  const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+  const normalizedExchange = normalizeExchangeName(coin.exchange);
+  const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
   let coinData = allCoinsData[coinKey];
 
   // 如果复合键找不到，回退到简单键查找（向后兼容）
@@ -601,7 +617,7 @@ async function checkGroupCoinThreshold(group, coin, currentRate, allCoinsData, g
 
   // 获取分组状态（而不是币种状态）
   const state = await storageService.getGroupState(group.id);
-  const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+  const coinStateKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
   const coinState = state.coin_states?.[coinStateKey] || { status: 'normal' };
 
   const now = new Date();
@@ -820,7 +836,8 @@ async function runLegacyMonitoring(config) {
         );
 
         // 使用复合键避免重复币种覆盖
-        const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+        const normalizedExchange = normalizeExchangeName(coin.exchange);
+        const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
         if (coinRateData && coinRateData.coins && coinRateData.coins[coinKey]) {
           allCoinsData[coinKey] = coinRateData.coins[coinKey];
 
@@ -981,7 +998,8 @@ async function runLegacyMonitoring(config) {
  */
 export async function checkCoinThreshold(coin, rateData, config) {
   // 优先使用复合键查找数据
-  const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+  const normalizedExchange = normalizeExchangeName(coin.exchange);
+  const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
   let coinData = rateData.coins[coinKey];
 
   // 如果复合键找不到，回退到简单键查找（向后兼容）
@@ -1492,7 +1510,8 @@ export async function getAllCoinsStatus() {
         const groupState = await storageService.getGroupState(group.id);
 
         for (const coin of group.coins) {
-          const coinStateKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+          const normalizedExchange = normalizeExchangeName(coin.exchange);
+          const coinStateKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
           const coinState = groupState.coin_states?.[coinStateKey] || { status: 'normal' };
 
           statusList.push({
@@ -1605,13 +1624,16 @@ async function scrapeAllCoinsOnce(allCoinsToScrape, logPrefix) {
             sharedPage
           );
 
-          const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+          const normalizedExchange = normalizeExchangeName(coin.exchange);
+          const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
 
           if (coinRateData && coinRateData.coins && coinRateData.coins[coinKey]) {
             allCoinsData[coinKey] = coinRateData.coins[coinKey];
             console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${coinRateData.coins[coinKey].annual_rate}%`);
           } else {
             console.warn(`⚠️ ${coin.symbol} 数据抓取失败`);
+            console.log(`🔍 可用的数据键: ${coinRateData?.coins ? Object.keys(coinRateData.coins).join(', ') : '无'}`);
+            console.log(`🔍 期望的键: ${coinKey}`);
             coinResults.push({
               coin: coin.symbol,
               exchange: coin.exchange,
@@ -1720,7 +1742,8 @@ async function processGroupNotificationsOnly(group, globalConfig, allScrapedData
     const triggeredCoins = [];
 
     for (const coin of enabledCoins) {
-      const coinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+      const normalizedExchange = normalizeExchangeName(coin.exchange);
+        const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
       const coinData = allScrapedData.allCoinsData?.[coinKey];
 
       if (!coinData) {
@@ -1811,11 +1834,193 @@ async function processGroupNotificationsOnly(group, globalConfig, allScrapedData
   }
 }
 
+/**
+ * 计算币种的下次监控触发时间
+ * 考虑分组启用状态、币种启用状态、触发条件、通知时间窗口
+ */
+export async function calculateNextTriggerTime(coin, group, globalConfig) {
+  // 1. 检查分组和币种是否启用
+  if (!group || group.enabled === false) {
+    return {
+      canTrigger: false,
+      reason: 'group_disabled'
+    };
+  }
+
+  if (!coin || coin.enabled === false) {
+    return {
+      canTrigger: false,
+      reason: 'coin_disabled'
+    };
+  }
+
+  // 2. 获取币种当前状态（使用标准化交易所名称匹配状态文件格式）
+  const normalizedExchange = normalizeExchangeName(coin.exchange);
+  const coinStateKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
+  const groupState = await storageService.getGroupState(group.id);
+  const coinState = groupState.coin_states?.[coinStateKey] || { status: 'normal' };
+
+  // 3. 优先级：冷却期 > 触发时间
+  if (coinState.status === 'alert' && coinState.next_notification) {
+    const now = new Date();
+    const nextNotificationTime = new Date(coinState.next_notification);
+
+    if (nextNotificationTime > now) {
+      // 在冷却期内
+      const diffMs = nextNotificationTime - now;
+      const diffMins = Math.ceil(diffMs / (1000 * 60));
+
+      if (diffMins < 60) {
+        return {
+          canTrigger: false,
+          reason: 'in_cooling',
+          displayText: `冷却中 [${diffMins}分钟后解除]`,
+          nextTime: nextNotificationTime
+        };
+      } else {
+        const diffHours = Math.ceil(diffMins / 60);
+        return {
+          canTrigger: false,
+          reason: 'in_cooling',
+          displayText: `冷却中 [${diffHours}小时后解除]`,
+          nextTime: nextNotificationTime
+        };
+      }
+    }
+  }
+
+  // 4. 计算下次系统触发时间
+  const nextSystemTrigger = calculateNextSystemTrigger(globalConfig);
+
+  // 5. 检查通知时间窗口
+  if (globalConfig.notification_hours?.enabled) {
+    const isWithinHours = isWithinNotificationHours(globalConfig);
+    if (!isWithinHours) {
+      // 不在通知时间段，显示下次通知时间段开始时间
+      const nextNotificationWindowStart = getNextNotificationWindowStart(globalConfig);
+      return {
+        canTrigger: false,
+        reason: 'outside_notification_hours',
+        displayText: `下次检查 [${formatNotificationTime(nextNotificationWindowStart)}]`,
+        nextTime: nextNotificationWindowStart
+      };
+    }
+  }
+
+  // 6. 可以正常触发，显示下次系统触发时间
+  return {
+    canTrigger: true,
+    reason: 'ready_to_trigger',
+    displayText: `下次检查 [${formatNotificationTime(nextSystemTrigger)}]`,
+    nextTime: nextSystemTrigger
+  };
+}
+
+/**
+ * 计算下次系统触发时间
+ */
+function calculateNextSystemTrigger(config) {
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+
+  const triggerSettings = config.trigger_settings || {};
+  const hourlyMinute = triggerSettings.hourly_minute || 5;
+  const dailyHour = triggerSettings.daily_hour || 9;
+  const dailyMinute = triggerSettings.daily_minute || 5;
+
+  // 计算下次每小时触发
+  let nextHourlyTrigger = new Date(now);
+  if (currentMinute < hourlyMinute) {
+    nextHourlyTrigger.setMinutes(hourlyMinute);
+    nextHourlyTrigger.setSeconds(0);
+    nextHourlyTrigger.setMilliseconds(0);
+  } else {
+    nextHourlyTrigger.setHours(currentHour + 1);
+    nextHourlyTrigger.setMinutes(hourlyMinute);
+    nextHourlyTrigger.setSeconds(0);
+    nextHourlyTrigger.setMilliseconds(0);
+  }
+
+  // 计算下次每日触发
+  let nextDailyTrigger = new Date(now);
+  if (currentHour < dailyHour || (currentHour === dailyHour && currentMinute < dailyMinute)) {
+    nextDailyTrigger.setHours(dailyHour);
+    nextDailyTrigger.setMinutes(dailyMinute);
+    nextDailyTrigger.setSeconds(0);
+    nextDailyTrigger.setMilliseconds(0);
+  } else {
+    nextDailyTrigger.setDate(nextDailyTrigger.getDate() + 1);
+    nextDailyTrigger.setHours(dailyHour);
+    nextDailyTrigger.setMinutes(dailyMinute);
+    nextDailyTrigger.setSeconds(0);
+    nextDailyTrigger.setMilliseconds(0);
+  }
+
+  // 返回更早的触发时间
+  return nextHourlyTrigger < nextDailyTrigger ? nextHourlyTrigger : nextDailyTrigger;
+}
+
+/**
+ * 计算下次通知时间窗口开始时间
+ */
+function getNextNotificationWindowStart(config) {
+  const now = new Date();
+  const startTime = parseTime(config.notification_hours.start);
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  let nextStart = new Date(now);
+
+  if (currentMinutes < startTime) {
+    // 今天还未到开始时间
+    nextStart.setHours(Math.floor(startTime / 60));
+    nextStart.setMinutes(startTime % 60);
+    nextStart.setSeconds(0);
+    nextStart.setMilliseconds(0);
+  } else {
+    // 今天的开始时间已过，设置为明天
+    nextStart.setDate(nextStart.getDate() + 1);
+    nextStart.setHours(Math.floor(startTime / 60));
+    nextStart.setMinutes(startTime % 60);
+    nextStart.setSeconds(0);
+    nextStart.setMilliseconds(0);
+  }
+
+  return nextStart;
+}
+
+/**
+ * 格式化显示时间
+ */
+function formatNotificationTime(date) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  if (date >= today && date < tomorrow) {
+    // 今天
+    return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+  } else {
+    // 明天或更晚
+    return `明天${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+  }
+}
+
+/**
+ * 获取自动监控状态（用于冲突检测）
+ */
+export function getAutoMonitoringStatus() {
+  return { running: autoMonitoringRunning };
+}
+
 // 导出监控服务
 export const monitorService = {
   runMonitoring,
   checkCoinThreshold,
   getAllCoinsStatus,
   shouldTriggerNow,
-  isWithinNotificationHours
+  isWithinNotificationHours,
+  calculateNextTriggerTime,
+  getAutoMonitoringStatus
 };
