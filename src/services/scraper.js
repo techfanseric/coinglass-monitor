@@ -1677,15 +1677,15 @@ export class ScraperService {
                   actualTimeframe = '24h';
                 }
 
-                // 使用页面实际解析的交易所名称（与查找逻辑保持一致）
-                const coinKey = `${expectedCoin.toUpperCase()}_${currentExchange}_${actualTimeframe}`;
+                // 统一数据键格式：交易所名称使用小写，与查找逻辑保持一致
+                const coinKey = `${expectedCoin.toUpperCase()}_${currentExchange.toLowerCase()}_${actualTimeframe}`;
 
                 // 只为当前请求的币种创建数据
                 if (!allCoinsData[coinKey]) {
                   console.log(`🆕 创建复合键数据: ${coinKey}, 首个利率: ${rate}%`);
                   allCoinsData[coinKey] = {
                     symbol: expectedCoin.toUpperCase(),
-                    exchange: expectedExchange,
+                    exchange: currentExchange.toLowerCase(), // 统一使用小写交易所名
                     timeframe: actualTimeframe,
                     coin_key: coinKey,
                     annual_rate: rate,
@@ -1713,26 +1713,16 @@ export class ScraperService {
           throw new Error(`无法获取 ${expectedCoin} 的真实利率数据，请检查 CoinGlass 网站访问状态`);
         }
 
-        // 统一的交易所名称格式化函数：小写转标准大写
-        const formatExchangeName = (exchange) => {
-          const normalizedExchange = exchange.toLowerCase();
-          switch (normalizedExchange) {
-            case 'binance': return 'Binance';
-            case 'okx': return 'OKX';
-            case 'bybit': return 'Bybit';
-            default: return exchange;
-          }
-        };
-
-        const formattedExchange = formatExchangeName(currentExchange);
+        // 统一使用小写交易所名称，保持数据键格式一致性
+        const normalizedExchange = currentExchange.toLowerCase();
         return {
-          exchange: formattedExchange,
+          exchange: normalizedExchange,
           timestamp: new Date().toISOString(),
           coins: allCoinsData,
           source: 'coinglass_real_data',
           extraction_info: {
             page_title: pageTitle,
-            current_exchange: formattedExchange,
+            current_exchange: normalizedExchange,
             current_coin: currentCoin,
             data_points_extracted: Object.keys(allCoinsData).length,
             extraction_timestamp: new Date().toISOString()
