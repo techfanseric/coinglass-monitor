@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import { storageService } from './storage.js';
 import { loggerService } from './logger.js';
-import { formatDateTime } from '../utils/time-utils.js';
+import { formatDateTime, normalizeExchangeName } from '../utils/time-utils.js';
 
 // 使用Stealth插件避免被检测
 puppeteer.use(StealthPlugin());
@@ -243,11 +243,12 @@ export class ScraperService {
       // 确定要抓取的币种列表
       const coinsToScrape = requestedCoins || [coin];
       const allCoinsData = {};
+      // 使用标准化交易所名称，与其他模块保持一致
+      const normalizedExchange = normalizeExchangeName(exchange);
 
       for (const targetCoin of coinsToScrape) {
         // 为重复币种创建唯一标识符（基于交易所和时间框架）
-        // 使用小写交易所名称，与页面内部逻辑保持一致
-        const coinKey = `${targetCoin}_${exchange.toLowerCase()}_${timeframe}`;
+        const coinKey = `${targetCoin}_${normalizedExchange}_${timeframe}`;
 
         // 🔒 修正：币种切换失败时重新访问页面
         const coinSwitchSuccess = await this.switchCoin(usePage, targetCoin);
@@ -341,8 +342,8 @@ export class ScraperService {
         console.log(`📊 提取 ${targetCoin} 数据...`);
         const extractedData = await this.extractTableData(usePage, exchange, targetCoin);
 
-        // 使用与数据存储一致的键名格式：币种_交易所_时间框架（交易所小写）
-        const actualCoinKey = `${targetCoin}_${exchange.toLowerCase()}_${timeframe}`;
+        // 使用与数据存储一致的键名格式：币种_交易所_时间框架（标准化交易所名称）
+        const actualCoinKey = `${targetCoin}_${normalizedExchange}_${timeframe}`;
 
         if (extractedData && extractedData.coins && extractedData.coins[actualCoinKey]) {
           const coinData = extractedData.coins[actualCoinKey];
@@ -1558,8 +1559,11 @@ export class ScraperService {
   async extractTableData(page, exchange, coin) {
     try {
       console.log(`📊 提取数据，预期交易所: ${exchange}, 主要币种: ${coin}`);
-      
-      const data = await page.evaluate((expectedExchange, expectedCoin) => {
+
+      // 在外部处理交易所标准化
+      const normalizedExchange = normalizeExchangeName(exchange);
+
+      const data = await page.evaluate((expectedExchange, expectedCoin, normalizedExchangeName) => {
         // 获取页面标题和当前配置
         const pageTitle = document.title;
         let currentExchange = expectedExchange;
@@ -1677,15 +1681,15 @@ export class ScraperService {
                   actualTimeframe = '24h';
                 }
 
-                // 统一数据键格式：交易所名称使用小写，与查找逻辑保持一致
-                const coinKey = `${expectedCoin.toUpperCase()}_${currentExchange.toLowerCase()}_${actualTimeframe}`;
+                // 统一数据键格式：使用传入的标准化交易所名称
+                const coinKey = `${expectedCoin.toUpperCase()}_${normalizedExchangeName}_${actualTimeframe}`;
 
                 // 只为当前请求的币种创建数据
                 if (!allCoinsData[coinKey]) {
                   console.log(`🆕 创建复合键数据: ${coinKey}, 首个利率: ${rate}%`);
                   allCoinsData[coinKey] = {
                     symbol: expectedCoin.toUpperCase(),
-                    exchange: currentExchange.toLowerCase(), // 统一使用小写交易所名
+                    exchange: normalizedExchangeName, // 使用传入的标准化交易所名称
                     timeframe: actualTimeframe,
                     coin_key: coinKey,
                     annual_rate: rate,
@@ -1713,22 +1717,20 @@ export class ScraperService {
           throw new Error(`无法获取 ${expectedCoin} 的真实利率数据，请检查 CoinGlass 网站访问状态`);
         }
 
-        // 统一使用小写交易所名称，保持数据键格式一致性
-        const normalizedExchange = currentExchange.toLowerCase();
         return {
-          exchange: normalizedExchange,
+          exchange: normalizedExchangeName,
           timestamp: new Date().toISOString(),
           coins: allCoinsData,
           source: 'coinglass_real_data',
           extraction_info: {
             page_title: pageTitle,
-            current_exchange: normalizedExchange,
+            current_exchange: normalizedExchangeName,
             current_coin: currentCoin,
             data_points_extracted: Object.keys(allCoinsData).length,
             extraction_timestamp: new Date().toISOString()
           }
         };
-      }, exchange, coin); // 传递参数
+      }, exchange, coin, normalizedExchange); // 传递参数
 
       // 在外部格式化时间戳
       data.timestamp = formatDateTime(new Date());

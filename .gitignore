@@ -51,3 +51,9 @@ tests/
 *.old
 *.orig
 *.copy
+
+# Cursor indexing ignore
+.cursorindexingignore
+
+# SpecStory ignore  
+.specstory/

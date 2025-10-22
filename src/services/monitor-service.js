@@ -233,14 +233,14 @@ async function runGroupedMonitoring(config) {
 
             groupState.coin_states[standardizedCoinKey] = {
               ...existingState, // 保持原有的状态、通知时间等
-              last_rate: coinData.annual_rate, // 🆕 更新最新利率
+              last_rate: coinData?.annual_rate, // 🆕 更新最新利率
               updated_at: formatDateTime(new Date()) // 🆕 更新时间戳
             };
 
             // 保存更新后的状态
             await storageService.updateGroupState(group.id, groupState.status || 'normal', groupState);
 
-            console.log(`✅ 更新 ${symbol} (${normalizedExchange}/${timeframe}) 利率: ${coinData.annual_rate}%`);
+            console.log(`✅ 更新 ${symbol} (${normalizedExchange}/${timeframe}) 利率: ${coinData?.annual_rate}%`);
             break; // 找到对应分组后跳出循环
 
           } catch (error) {
@@ -431,14 +431,14 @@ async function processGroupMonitoring(group, globalConfig) {
           if (coinRateData && coinRateData.coins && coinRateData.coins[coinKey]) {
             allCoinsData[coinKey] = coinRateData.coins[coinKey];
 
-            console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${coinRateData.coins[coinKey].annual_rate}%`);
+            console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${coinRateData.coins[coinKey]?.annual_rate}%`);
 
             coinResults.push({
               coin: coin.symbol,
               exchange: coin.exchange,
               timeframe: coin.timeframe,
               success: true,
-              currentRate: coinRateData.coins[coinKey].annual_rate,
+              currentRate: coinRateData.coins[coinKey]?.annual_rate,
               reason: 'scraping_success'
             });
           } else {
@@ -527,15 +527,23 @@ async function processGroupMonitoring(group, globalConfig) {
 
     for (const coin of coinsToScrape) {
       const normalizedExchange = normalizeExchangeName(coin.exchange);
-        const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
+      const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
       const coinData = allCoinsData[coinKey];
 
       if (!coinData) {
         console.warn(`⚠️ 币种 ${coin.symbol} 数据不存在，跳过阈值检查`);
+        console.log(`🔍 尝试查找的键: ${coinKey}`);
+        console.log(`🔍 可用的数据键: ${Object.keys(allCoinsData).join(', ')}`);
         continue;
       }
 
-      const currentRate = coinData.annual_rate;
+      // 添加空值检查
+      if (typeof coinData.annual_rate !== 'number') {
+        console.error(`❌ 币种 ${coin.symbol} 的 annual_rate 数据无效:`, coinData.annual_rate);
+        continue;
+      }
+
+      const currentRate = coinData?.annual_rate;
       console.log(`🔍 ${coin.symbol}: 当前利率 ${currentRate}% vs 阈值 ${coin.threshold}%`);
 
       try {
@@ -661,10 +669,23 @@ async function checkGroupCoinThreshold(group, coin, currentRate, allCoinsData, g
 
   if (!coinData) {
     console.log(`❌ 分组${group.name} 币种 ${coin.symbol} 数据不存在`);
+    console.log(`🔍 尝试查找的键: ${coinKey} 或 ${coin.symbol}`);
+    console.log(`🔍 可用的数据键: ${Object.keys(allCoinsData).join(', ')}`);
     return {
       coin: coin.symbol,
       success: false,
       reason: 'data_not_found',
+      triggered: false
+    };
+  }
+
+  // 添加空值检查
+  if (typeof coinData?.annual_rate !== 'number') {
+    console.error(`❌ 分组${group.name} 币种 ${coin.symbol} 的 annual_rate 数据无效:`, coinData?.annual_rate);
+    return {
+      coin: coin.symbol,
+      success: false,
+      reason: 'invalid_annual_rate',
       triggered: false
     };
   }
@@ -911,7 +932,7 @@ async function runLegacyMonitoring(config) {
           // 复合键存储已经完成，不再创建币种符号副本
           // 这确保数据的唯一性和正确性，避免复合键被简单键覆盖
 
-          console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${coinRateData.coins[coinKey].annual_rate}%`);
+          console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${coinRateData.coins[coinKey]?.annual_rate}%`);
 
           // 注意：阈值检查将在所有币种抓取完成后统一进行（第147-157行）
         } else {
@@ -1832,7 +1853,7 @@ async function processGroupNotificationsOnly(group, globalConfig, allScrapedData
         continue;
       }
 
-      const currentRate = coinData.annual_rate;
+      const currentRate = coinData?.annual_rate;
       const threshold = coin.threshold;
 
       console.log(`🔍 检查币种 ${coin.symbol}: 当前利率 ${currentRate}% vs 阈值 ${threshold}%`);

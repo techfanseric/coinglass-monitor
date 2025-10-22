@@ -232,18 +232,18 @@ router.post('/coinglass', async (req, res) => {
           // 使用复合键存储独立的数据副本
           allCoinsData[coinKey] = coinDataWithMeta;
 
-          console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${foundCoinData.annual_rate}%`);
+          console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${foundCoinData?.annual_rate}%`);
 
           scrapingSummary.push({
             symbol: coin.symbol,
             exchange: coin.exchange,
             timeframe: coin.timeframe,
             success: true,
-            rate: foundCoinData.annual_rate
+            rate: foundCoinData?.annual_rate
           });
 
           // 标记币种完成，包含真实利率信息
-          scrapeTracker.completeCoin(coin.symbol, true, foundCoinData.annual_rate);
+          scrapeTracker.completeCoin(coin.symbol, true, foundCoinData?.annual_rate);
 
         } else {
           console.warn(`⚠️ ${coin.symbol} 数据抓取失败`);
@@ -423,7 +423,7 @@ async function runCompleteMonitorCheck(rateData, config, enabledCoins) {
       let coinData = rateData.coins[coinKey] || rateData.coins[coin.symbol];
 
       if (coinData?.annual_rate) {
-        console.log(`🔍 处理币种: ${coin.symbol} (${coin.exchange}/${coin.timeframe}) -> 利率 ${coinData.annual_rate}%`);
+        console.log(`🔍 处理币种: ${coin.symbol} (${coin.exchange}/${coin.timeframe}) -> 利率 ${coinData?.annual_rate}%`);
       } else {
         console.log(`🔍 处理币种: ${coin.symbol} (${coin.exchange}/${coin.timeframe}) -> 数据不存在`);
       }
