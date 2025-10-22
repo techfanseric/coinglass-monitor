@@ -19,6 +19,7 @@ export class ScraperService {
     this.browser = null;
     this.page = null;
 
+  
     // 从环境变量加载配置
     this.config = {
       windowWidth: parseInt(process.env.PUPPETEER_WINDOW_WIDTH) || 1920,
@@ -143,21 +144,96 @@ export class ScraperService {
 
       if (!useBrowser || !usePage) {
         console.log('🌐 启动新的浏览器会话...');
-        useBrowser = await this.initBrowser();
-        usePage = await useBrowser.newPage();
-        await usePage.setViewport({ width: this.config.windowWidth, height: this.config.windowHeight });
 
-        console.log('📖 访问 CoinGlass 页面...');
-        await usePage.goto(this.config.coinglassBaseUrl, {
-          waitUntil: 'networkidle2',
-          timeout: this.config.pageTimeout
-        });
+        // 增强的页面访问重试机制
+        let pageLoadSuccess = false;
+        let retryCount = 0;
+        const maxPageLoadRetries = 3;
 
-        console.log('⏳ 等待页面完全加载...');
-        await usePage.waitForTimeout(this.config.waitTimes.initial);
+        while (!pageLoadSuccess && retryCount < maxPageLoadRetries) {
+          try {
+            retryCount++;
+            console.log(`🔄 第 ${retryCount} 次尝试启动浏览器和访问页面...`);
+
+            // 每次重试都创建新的浏览器实例
+            if (useBrowser) {
+              try {
+                await useBrowser.close();
+              } catch (closeError) {
+                console.warn('关闭现有浏览器时出现警告:', closeError.message);
+              }
+            }
+
+            useBrowser = await this.initBrowser();
+            usePage = await useBrowser.newPage();
+            await usePage.setViewport({ width: this.config.windowWidth, height: this.config.windowHeight });
+
+            // 设置用户代理和其他反检测措施
+            await usePage.setUserAgent(this.config.userAgent);
+            await usePage.setExtraHTTPHeaders({
+              'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+            });
+
+            console.log('📖 访问 CoinGlass 页面...');
+
+            // 增加页面加载超时时间并使用更宽松的等待策略
+            await usePage.goto(this.config.coinglassBaseUrl, {
+              waitUntil: 'domcontentloaded',
+              timeout: this.config.pageTimeout * 2 // 双倍超时时间
+            });
+
+            // 额外等待网络稳定
+            console.log('⏳ 等待页面网络稳定...');
+            await usePage.waitForTimeout(this.config.waitTimes.initial * 2); // 双倍等待时间
+
+            // 验证页面是否真正加载成功
+            const pageTitle = await usePage.title();
+            if (pageTitle && pageTitle.includes('CoinGlass')) {
+              console.log(`✅ 页面加载成功: ${pageTitle}`);
+              pageLoadSuccess = true;
+            } else {
+              throw new Error('页面标题验证失败，可能未正确加载');
+            }
+
+          } catch (pageError) {
+            console.warn(`⚠️ 第 ${retryCount} 次页面访问失败: ${pageError.message}`);
+
+            if (retryCount >= maxPageLoadRetries) {
+              throw new Error(`页面访问失败，已重试 ${maxPageLoadRetries} 次: ${pageError.message}`);
+            }
+
+            // 重试间隔
+            const retryDelay = 5000 * retryCount; // 递增延迟
+            console.log(`⏳ 等待 ${retryDelay/1000} 秒后重试...`);
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+          }
+        }
+
         shouldCleanup = true;
       } else {
         console.log('📋 复用现有浏览器会话');
+
+        // 验证现有页面是否仍然可用
+        try {
+          const pageTitle = await usePage.title();
+          if (!pageTitle || !pageTitle.includes('CoinGlass')) {
+            throw new Error('现有页面已失效');
+          }
+        } catch (pageError) {
+          console.warn('⚠️ 现有页面失效，需要重新创建:', pageError.message);
+          useBrowser = await this.initBrowser();
+          usePage = await useBrowser.newPage();
+          await usePage.setViewport({ width: this.config.windowWidth, height: this.config.windowHeight });
+
+          await usePage.goto(this.config.coinglassBaseUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: this.config.pageTimeout * 2
+          });
+
+          await usePage.waitForTimeout(this.config.waitTimes.initial * 2);
+          shouldCleanup = true;
+        }
       }
 
       // === 智能切换交易所 ===
@@ -265,12 +341,8 @@ export class ScraperService {
         console.log(`📊 提取 ${targetCoin} 数据...`);
         const extractedData = await this.extractTableData(usePage, exchange, targetCoin);
 
-        // 导入标准化函数
-        const { normalizeExchangeName } = await import('../utils/time-utils.js');
-        const normalizedExchange = normalizeExchangeName(exchange);
-
-        // 使用标准化的复合键查找数据（大写币种，标准化交易所）
-        const actualCoinKey = `${targetCoin}_${normalizedExchange}_${timeframe}`;
+        // 使用与数据存储一致的键名格式：币种_交易所_时间框架（交易所小写）
+        const actualCoinKey = `${targetCoin}_${exchange.toLowerCase()}_${timeframe}`;
 
         if (extractedData && extractedData.coins && extractedData.coins[actualCoinKey]) {
           const coinData = extractedData.coins[actualCoinKey];
@@ -1386,28 +1458,33 @@ export class ScraperService {
         return validationResults;
       }
 
-      // 3. 利率数据验证
+      // 3. 利率数据验证 - 利率必须大于等于0，接受0%数据
       if (typeof coinData.annual_rate !== 'number' || coinData.annual_rate < 0) {
         validationResults.isValid = false;
-        validationResults.reasons.push(`年利率数据无效: ${coinData.annual_rate}`);
+        validationResults.reasons.push(`年利率数据无效: ${coinData.annual_rate}% (必须大于等于0)`);
         return validationResults;
       }
 
-      // 4. 合理性检查 - 利率范围验证（一般借贷利率在0.01%到100%之间）
+      // 4. 合理性检查 - 利率范围验证（一般借贷利率在0%到100%之间）
       if (coinData.annual_rate > 100) {
         validationResults.warnings.push(`年利率异常高: ${coinData.annual_rate}%`);
-      } else if (coinData.annual_rate < 0.01) {
-        validationResults.warnings.push(`年利率异常低: ${coinData.annual_rate}%`);
+      } else if (coinData.annual_rate < 0) {
+        validationResults.isValid = false;
+        validationResults.reasons.push(`年利率不能为负数: ${coinData.annual_rate}%`);
       }
 
       // 5. 历史数据验证
       if (!coinData.history || !Array.isArray(coinData.history) || coinData.history.length === 0) {
         validationResults.warnings.push('历史数据为空或无效');
       } else {
-        // 验证历史数据的一致性
+        // 验证历史数据的一致性 - 利率必须大于等于0，接受0%数据
         const inconsistentData = coinData.history.some(point =>
           typeof point.annual_rate !== 'number' ||
           point.annual_rate < 0 ||
+          typeof point.daily_rate !== 'number' ||
+          point.daily_rate < 0 ||
+          typeof point.hourly_rate !== 'number' ||
+          point.hourly_rate < 0 ||
           !point.time
         );
 
@@ -1444,12 +1521,13 @@ export class ScraperService {
         }
       }
 
-      // 8. 数据来源验证
+      
+      // 9. 数据来源验证
       if (!coinData.source || coinData.source !== 'coinglass_real_time') {
         validationResults.warnings.push(`数据来源异常: ${coinData.source}`);
       }
 
-      // 9. 注意：移除了连续相同利率检测，因为这是正常现象
+      // 10. 注意：移除了连续相同利率检测，因为这是正常现象
       // 连续相同的利率在稳定市场中是常见情况，不代表数据复用问题
 
       // 生成综合验证结果
@@ -1554,17 +1632,47 @@ export class ScraperService {
               if (annualRateMatch) {
                 const rate = parseFloat(annualRateMatch[1]);
                 console.log(`📈 找到数据点: ${timeText} -> ${rate}% (币种: ${expectedCoin})`);
+
+                // 严格验证：利率必须大于0
+                if (rate <= 0) {
+                  console.log(`❌ 年利率必须大于0: ${rate}%，跳过此数据点`);
+                  continue;
+                }
+
+                // 严格验证：必须有完整的年利率、日利率和小时利率数据，不接受计算填充
+                if (!dailyRateMatch) {
+                  console.log(`❌ 缺少日利率数据: ${timeText} | ${dailyRateText}，跳过此数据点`);
+                  continue;
+                }
+                if (!hourlyRateMatch) {
+                  console.log(`❌ 缺少小时利率数据: ${timeText} | ${hourlyRateText}，跳过此数据点`);
+                  continue;
+                }
+
+                const dailyRate = parseFloat(dailyRateMatch[1]);
+                const hourlyRate = parseFloat(hourlyRateMatch[1]);
+
+                // 严格验证：日利率和小时利率也必须大于等于0，接受0%数据
+                if (dailyRate < 0) {
+                  console.log(`❌ 日利率不能为负数: ${dailyRate}%，跳过此数据点`);
+                  continue;
+                }
+                if (hourlyRate < 0) {
+                  console.log(`❌ 小时利率不能为负数: ${hourlyRate}%，跳过此数据点`);
+                  continue;
+                }
+
                 const dataPoint = {
                   time: timeText,
                   annual_rate: rate,
-                  daily_rate: dailyRateMatch ? parseFloat(dailyRateMatch[1]) : (rate / 365),
-                  hourly_rate: hourlyRateMatch ? parseFloat(hourlyRateMatch[1]) : (rate / 365 / 24)
+                  daily_rate: dailyRate,
+                  hourly_rate: hourlyRate
                 };
 
                 // 使用复合键作为数据标识，确保数据唯一性
-                // 从页面标题或URL推断时间框架，默认为1h
+                // 从页面标题或URL推断时间框架
                 const pageUrl = window.location.href;
-                let actualTimeframe = '1h'; // 默认值
+                let actualTimeframe = '1h';
                 if (pageUrl.includes('24h') || document.title.includes('24')) {
                   actualTimeframe = '24h';
                 }
