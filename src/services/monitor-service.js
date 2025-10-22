@@ -199,6 +199,60 @@ async function runGroupedMonitoring(config) {
   // 使用全局浏览器会话一次性抓取所有币种
   const allScrapedData = await scrapeAllCoinsOnce(allCoinsToScrape, logPrefix);
 
+  // 🆕 添加统一的状态更新：每次抓取成功后立即更新所有币种的last_rate
+  if (allScrapedData.success && allScrapedData.allCoinsData) {
+    console.log(`🔄 开始更新所有币种的最新利率数据...`);
+
+    for (const [coinKey, coinData] of Object.entries(allScrapedData.allCoinsData)) {
+      // coinKey 格式: symbol_exchange_timeframe
+      const [symbol, exchange, timeframe] = coinKey.split('_');
+      const normalizedExchange = normalizeExchangeName(exchange); // 标准化交易所名称
+
+      // 找到这个币种属于哪个分组
+      for (const group of enabledGroups) {
+        const coinInGroup = group.coins.find(c =>
+          c.symbol === symbol &&
+          normalizeExchangeName(c.exchange) === normalizedExchange &&
+          c.timeframe === timeframe
+        );
+
+        if (coinInGroup) {
+          try {
+            // 获取当前分组状态
+            const groupState = await storageService.getGroupState(group.id) || {
+              status: 'normal',
+              coin_states: {}
+            };
+
+            // 更新币种的last_rate，保持其他状态不变
+            if (!groupState.coin_states) groupState.coin_states = {};
+
+            // 使用标准化的键名
+            const standardizedCoinKey = `${symbol}_${normalizedExchange}_${timeframe}`;
+            const existingState = groupState.coin_states[standardizedCoinKey] || { status: 'normal' };
+
+            groupState.coin_states[standardizedCoinKey] = {
+              ...existingState, // 保持原有的状态、通知时间等
+              last_rate: coinData.annual_rate, // 🆕 更新最新利率
+              updated_at: formatDateTime(new Date()) // 🆕 更新时间戳
+            };
+
+            // 保存更新后的状态
+            await storageService.updateGroupState(group.id, groupState.status || 'normal', groupState);
+
+            console.log(`✅ 更新 ${symbol} (${normalizedExchange}/${timeframe}) 利率: ${coinData.annual_rate}%`);
+            break; // 找到对应分组后跳出循环
+
+          } catch (error) {
+            console.error(`❌ 更新 ${symbol} 状态失败:`, error.message);
+          }
+        }
+      }
+    }
+
+    console.log(`✅ 所有币种利率数据更新完成`);
+  }
+
   // 按分组处理通知（只处理通知逻辑，不再抓取）
   for (const group of enabledGroups) {
     try {
@@ -1631,9 +1685,20 @@ async function scrapeAllCoinsOnce(allCoinsToScrape, logPrefix) {
           const normalizedExchange = normalizeExchangeName(coin.exchange);
           const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
 
-          if (coinRateData && coinRateData.coins && coinRateData.coins[coinKey]) {
-            allCoinsData[coinKey] = coinRateData.coins[coinKey];
-            console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${coinRateData.coins[coinKey].annual_rate}%`);
+          // 检查抓取返回的数据，同时支持标准化和原始键名
+          const scrapedCoinKey = `${coin.symbol}_${coin.exchange}_${coin.timeframe}`;
+
+          if (coinRateData && coinRateData.coins) {
+            // 优先使用标准化的键名
+            if (coinRateData.coins[coinKey]) {
+              allCoinsData[coinKey] = coinRateData.coins[coinKey];
+            }
+            // 如果标准化键名不存在，尝试使用原始键名
+            else if (coinRateData.coins[scrapedCoinKey]) {
+              allCoinsData[coinKey] = coinRateData.coins[scrapedCoinKey];
+            }
+            const successKey = coinRateData.coins[coinKey] ? coinKey : scrapedCoinKey;
+            console.log(`✅ 抓取 ${coin.symbol} (${coin.exchange}/${coin.timeframe}) 成功，利率: ${coinRateData.coins[successKey].annual_rate}%`);
           } else {
             console.warn(`⚠️ ${coin.symbol} 数据抓取失败`);
             console.log(`🔍 可用的数据键: ${coinRateData?.coins ? Object.keys(coinRateData.coins).join(', ') : '无'}`);
