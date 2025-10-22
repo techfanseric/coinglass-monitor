@@ -44,3 +44,10 @@ docs/
 
 # 测试
 tests/
+
+# 备份文件
+*.backup
+*.bak
+*.old
+*.orig
+*.copy

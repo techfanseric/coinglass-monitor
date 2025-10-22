@@ -133,6 +133,79 @@ class EmailSuggestionManager {
 class ConfigManager {
     constructor() {
         this.apiBase = window.location.origin;
+        // 存储分组收起状态的持久化存储
+        this.collapsedGroups = this.loadCollapsedGroups();
+    }
+
+    // 加载分组收起状态
+    loadCollapsedGroups() {
+        try {
+            const stored = localStorage.getItem('coinglass_monitor_collapsed_groups');
+            return stored ? JSON.parse(stored) : {};
+        } catch (error) {
+            console.warn('加载分组收起状态失败:', error);
+            return {};
+        }
+    }
+
+    // 保存分组收起状态
+    saveCollapsedGroups() {
+        try {
+            localStorage.setItem('coinglass_monitor_collapsed_groups', JSON.stringify(this.collapsedGroups));
+        } catch (error) {
+            console.warn('保存分组收起状态失败:', error);
+        }
+    }
+
+    // 切换分组收起展开状态
+    toggleGroupCollapsed(groupId) {
+        this.collapsedGroups[groupId] = !this.collapsedGroups[groupId];
+        this.saveCollapsedGroups();
+        this.updateGroupCollapsedUI(groupId);
+    }
+
+    // 更新分组收起展开UI
+    updateGroupCollapsedUI(groupId) {
+        const groupElement = document.querySelector(`[data-group-id="${groupId}"]`);
+        if (!groupElement) return;
+
+        const isCollapsed = this.collapsedGroups[groupId];
+        const contentSection = groupElement.querySelector('.group-content-section');
+        const titleSection = groupElement.querySelector('.group-title-section');
+        const collapseArrow = groupElement.querySelector('.collapse-arrow');
+
+        if (contentSection) {
+            contentSection.style.display = isCollapsed ? 'none' : 'block';
+        }
+
+        if (titleSection) {
+            titleSection.title = isCollapsed ? '展开' : '收起';
+        }
+
+        if (collapseArrow) {
+            // 更新箭头的CSS类来改变方向
+            collapseArrow.className = `collapse-arrow ${isCollapsed ? 'collapsed' : 'expanded'}`;
+        }
+
+        // 更新data属性
+        groupElement.setAttribute('data-collapsed', isCollapsed);
+    }
+
+    // 自动收起禁用的分组
+    autoCollapseDisabledGroups() {
+        const config = window.appState.currentConfig;
+        if (!config || !config.email_groups) return;
+
+        config.email_groups.forEach(group => {
+            if (group.enabled === false) {
+                // 只有当用户没有手动设置过状态时才自动收起
+                if (!(group.id in this.collapsedGroups)) {
+                    this.collapsedGroups[group.id] = true;
+                }
+            }
+        });
+
+        this.saveCollapsedGroups();
     }
 
     // 切换分组菜单显示
@@ -224,6 +297,73 @@ class ConfigManager {
                 input.select();
             }
         }, 100);
+    }
+
+    // 复制邮件分组
+    async duplicateEmailGroup(groupId) {
+        const groups = window.appState.currentConfig?.email_groups || [];
+        const sourceGroup = groups.find(g => g.id === groupId);
+
+        if (!sourceGroup) {
+            window.appUtils?.showAlert?.('分组信息不存在', 'error');
+            return;
+        }
+
+        // 关闭菜单
+        const menu = document.getElementById(`groupMenu_${groupId}`);
+        if (menu) {
+            menu.classList.remove('show');
+        }
+
+        // 生成分组名称 - 在原名称后添加"副本"
+        const baseName = sourceGroup.name;
+        const newName = `${baseName} 副本`;
+
+        // 检查名称是否已存在，如果存在则添加数字后缀
+        let finalName = newName;
+        let nameCounter = 1;
+        while (groups.some(g => g.name === finalName)) {
+            finalName = `${newName} ${nameCounter}`;
+            nameCounter++;
+        }
+
+        // 创建复制的分组
+        const duplicatedGroup = {
+            id: `group_${Date.now()}`,
+            name: finalName,
+            email: sourceGroup.email || '',
+            enabled: false, // 复制的分组默认禁用
+            coins: sourceGroup.coins ? sourceGroup.coins.map(coin => ({
+                ...coin,
+                // 清除动态数据
+                last_rate: null,
+                last_check: null,
+                status: null,
+                next_notification: null
+            })) : []
+        };
+
+        // 添加到本地配置
+        groups.push(duplicatedGroup);
+
+        try {
+            // 先渲染界面（给用户即时反馈）
+            await this.renderEmailGroups();
+            window.appUtils?.showAlert?.(`已复制 ${sourceGroup.name} 为 ${finalName}`, 'success');
+
+            // 然后保存到后端
+            await this.saveConfig();
+        } catch (error) {
+            console.error('复制邮件分组失败:', error);
+            window.appUtils?.showAlert?.('复制失败，请重试', 'error');
+
+            // 如果保存失败，回滚本地状态
+            const groupIndex = groups.findIndex(g => g.id === duplicatedGroup.id);
+            if (groupIndex !== -1) {
+                groups.splice(groupIndex, 1);
+                await this.renderEmailGroups();
+            }
+        }
     }
 
     // 保存分组名称
@@ -1160,10 +1300,21 @@ class ConfigManager {
             console.warn('获取监控状态失败:', error);
         }
 
-        container.innerHTML = groups.map((group, index) => `
-            <div class="email-group" data-group-id="${group.id}">
+        // 构建HTML字符串
+        let html = '';
+
+        groups.forEach((group) => {
+            const isCollapsed = this.collapsedGroups[group.id] || false;
+
+            html += `
+            <div class="email-group" data-group-id="${group.id}" data-collapsed="${isCollapsed}">
                 <div class="group-header">
-                    <div class="group-title-section">
+                    <div class="group-title-section" onclick="window.appConfig.toggleGroupCollapsed('${group.id}')" style="cursor: pointer;">
+                        <span class="collapse-arrow ${isCollapsed ? 'collapsed' : 'expanded'}">
+                            <svg viewBox="0 0 24 24">
+                                <polyline points="6,9 12,15 18,9"></polyline>
+                            </svg>
+                        </span>
                         <h3>${group.name}</h3>
                     </div>
                     <div class="group-right-section">
@@ -1177,221 +1328,83 @@ class ConfigManager {
                             <div id="groupMenu_${group.id}" class="more-dropdown more-dropdown-small">
                                 <button onclick="window.appConfig.toggleGroupStatus('${group.id}')" class="more-dropdown-item">
                                     ${group.enabled !== false ? '禁用' : '启用'}
-                                </button>
-                                ${this.hasGroupCooldownCoins(group, monitoringStatus) ?
-                                    `<button onclick="window.appMonitorUI.resetGroupCooldown('${group.id}')" class="more-dropdown-item">清除所有冷却期</button>` : ''
-                                }
+                                </button>`;
+
+            if (this.hasGroupCooldownCoins(group, monitoringStatus)) {
+                html += `<button onclick="window.appMonitorUI.resetGroupCooldown('${group.id}')" class="more-dropdown-item">清除所有冷却期</button>`;
+            }
+
+            html += `
                                 <button onclick="window.appConfig.renameGroup('${group.id}')" class="more-dropdown-item">重命名</button>
+                                <button onclick="window.appConfig.duplicateEmailGroup('${group.id}')" class="more-dropdown-item">复制</button>
                                 <button onclick="window.appConfig.deleteEmailGroup('${group.id}')" class="more-dropdown-item danger">删除</button>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="group-email">
-                    <label>邮箱地址:</label>
-                    <input type="email"
-                           value="${group.email || ''}"
-                           onchange="window.appConfig.updateGroupEmail('${group.id}', this.value)"
-                           placeholder="输入邮箱地址（如：user@qq.com）">
-                </div>
+                <div class="group-content-section" style="display: ${isCollapsed ? 'none' : 'block'};">
+                    <div class="group-email">
+                        <label>邮箱地址:</label>
+                        <input type="email"
+                               value="${group.email || ''}"
+                               onchange="window.appConfig.updateGroupEmail('${group.id}', this.value)"
+                               placeholder="输入邮箱地址（如：user@qq.com）">
+                    </div>
 
-                <div class="group-coins">
-                    <label>监控币种:</label>
+                    <div class="group-coins">
+                        <label>监控币种:</label>`;
 
-                    ${group.coins.length > 0 ? `
-                        <div id="addButtonContainer_${group.id}">
-                            <button onclick="window.appConfig.toggleAddCoinForm('${group.id}')" class="btn" style="width: 100%; background: #f8fafc; border: 1px dashed #cbd5e0; color: #64748b;">
-                                + 添加币种
-                            </button>
-                        </div>
-                        <div id="addCoinForm_${group.id}" class="add-coin-form" style="display: none;">
-                            <select id="newCoinExchange_${group.id}">
-                                <option value="OKX">OKX</option>
-                                <option value="Binance">Binance</option>
-                                <option value="Bybit">Bybit</option>
-                            </select>
-                            <input type="text" id="newCoinSymbol_${group.id}" placeholder="币种代码 (如: BTC, USDT)">
-                            <select id="newCoinTimeframe_${group.id}">
-                                <option value="1h">1小时</option>
-                                <option value="24h">24小时</option>
-                            </select>
-                            <input type="number" id="newCoinThreshold_${group.id}" placeholder="利率阈值 (%)" step="0.1" min="0">
-                            <button onclick="window.appConfig.addCoinToGroup('${group.id}')">添加</button>
-                            <button onclick="window.appConfig.toggleAddCoinForm('${group.id}')" class="btn-secondary">取消</button>
-                        </div>
-                    ` : `
-                        <div class="add-coin-form">
-                            <select id="newCoinExchange_${group.id}">
-                                <option value="OKX">OKX</option>
-                                <option value="Binance">Binance</option>
-                                <option value="Bybit">Bybit</option>
-                            </select>
-                            <input type="text" id="newCoinSymbol_${group.id}" placeholder="币种代码 (如: BTC, USDT)">
-                            <select id="newCoinTimeframe_${group.id}">
-                                <option value="1h">1小时</option>
-                                <option value="24h">24小时</option>
-                            </select>
-                            <input type="number" id="newCoinThreshold_${group.id}" placeholder="利率阈值 (%)" step="0.1" min="0">
-                            <button onclick="window.appConfig.addCoinToGroup('${group.id}')">添加</button>
-                        </div>
-                    `}
+            // 简化的币种显示逻辑
+            if (group.coins && group.coins.length > 0) {
+                html += `
+                        <button onclick="window.appConfig.toggleAddCoinForm('${group.id}')" class="btn" style="width: 100%; background: #f8fafc; border: 1px dashed #cbd5e0; color: #64748b; margin-bottom: 12px;">
+                            + 添加币种
+                        </button>
+                        <div class="coins-list">`;
 
-                    <div class="coins-list" style="margin-top: 12px;">
-                        ${group.coins.slice().reverse().map((coin, index) => {
-                            const actualIndex = group.coins.length - 1 - index;
-
-                            // 获取币种状态（使用标准化交易所名称匹配后端API格式）
-                            const normalizedExchange = this.normalizeExchangeName(coin.exchange);
-                            const coinKey = `${coin.symbol}_${normalizedExchange}_${coin.timeframe}`;
-                            const coinState = monitoringStatus?.[coinKey] || { status: 'normal' };
-
-                            // 获取后端计算的下次触发时间信息
-                            const nextTriggerInfo = coinState.next_trigger_info;
-
-                            // 新的状态显示逻辑 - 使用后端计算的下次触发时间
-                            const getStatusDisplay = (coinState, nextTriggerInfo, groupEnabled) => {
-                                // 如果分组禁用，不显示任何时间信息
-                                if (!groupEnabled) {
-                                    return '';
-                                }
-
-                                // 优先级：冷却期 > 触发时间
-                                if (nextTriggerInfo && nextTriggerInfo.reason === 'in_cooling') {
-                                    return nextTriggerInfo.displayText;
-                                }
-
-                                // 正常状态或可以立即触发时，显示下次检查时间
-                                if (nextTriggerInfo && nextTriggerInfo.displayText) {
-                                    return nextTriggerInfo.displayText;
-                                }
-
-                                // 兜容旧逻辑（如果API没有返回next_trigger_info）
-                                if (coinState.status === 'alert' && coinState.next_notification) {
-                                    const now = new Date();
-                                    const nextTime = new Date(coinState.next_notification);
-
-                                    if (nextTime > now) {
-                                        // 还在冷却期
-                                        const diffMs = nextTime - now;
-                                        const diffMins = Math.ceil(diffMs / (1000 * 60));
-
-                                        if (diffMins < 60) {
-                                            return `冷却中 [${diffMins}分钟后解除]`;
-                                        } else {
-                                            const diffHours = Math.ceil(diffMins / 60);
-                                            return `冷却中 [${diffHours}小时后解除]`;
-                                        }
-                                    }
-                                }
-
-                                // 正常状态，不显示任何内容
-                                return '';
-                            };
-
-                            // 格式化警报时间显示
-                            const formatAlertTime = (timestamp) => {
-                                const alertTime = new Date(timestamp);
-                                const now = new Date();
-
-                                // 判断是否是今天
-                                const isToday = alertTime.toDateString() === now.toDateString();
-                                const isYesterday = alertTime.toDateString() === new Date(now.getTime() - 24 * 60 * 60 * 1000).toDateString();
-
-                                const timeStr = `${alertTime.getHours().toString().padStart(2, '0')}:${alertTime.getMinutes().toString().padStart(2, '0')}`;
-
-                                if (isToday) {
-                                    return timeStr; // 今天只显示时间
-                                } else if (isYesterday) {
-                                    return `昨天 ${timeStr}`; // 昨天显示"昨天"
-                                } else {
-                                    // 其他日期显示月/日
-                                    const month = alertTime.getMonth() + 1;
-                                    const day = alertTime.getDate();
-                                    return `${month}/${day} ${timeStr}`;
-                                }
-                            };
-
-                            // 新的利率栏显示逻辑 - 包含警报信息和时间
-                            const getRateDisplay = (coinState, coin) => {
-                                const currentRate = coinState.last_rate;
-                                if (currentRate === null || currentRate === undefined) {
-                                    return { rateText: null, comparisonText: '', timeText: '', showIcon: '', hasData: false }; // 无数据时不显示
-                                }
-
-                                // 格式化时间 - 优先使用last_notification，其次使用updated_at
-                                let timeToShow = coinState.last_notification || coinState.updated_at;
-                                let timeText = '';
-                                let showIcon = '';
-
-                                if (timeToShow) {
-                                    const formattedTime = formatAlertTime(timeToShow);
-                                    timeText = formattedTime;
-                                } else {
-                                    // 如果没有时间戳，使用当前时间
-                                    const now = new Date();
-                                    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-                                    timeText = timeStr;
-                                }
-
-                                // 判断比较关系 - 始终基于实际数值比较
-                                const threshold = coin.threshold;
-                                let comparisonSymbol = '';
-
-                                // 始终使用实际数值进行比较，确保显示逻辑正确
-                                if (currentRate > threshold) {
-                                    comparisonSymbol = '>';
-                                    showIcon = '🚨 ';
-                                } else if (currentRate < threshold) {
-                                    comparisonSymbol = '<';
-                                    showIcon = '';
-                                } else {
-                                    comparisonSymbol = '=';
-                                    showIcon = '';
-                                }
-
-                                return { rateText: `${currentRate}%`, comparisonText: comparisonSymbol, timeText, showIcon, hasData: true };
-                            };
-
-                            const statusDisplay = getStatusDisplay(coinState, nextTriggerInfo, group.enabled !== false);
-
-                            // 判断是否显示冷却期重置选项
-                            const isInCooldown = coinState.status === 'alert' && coinState.next_notification && new Date(coinState.next_notification) > new Date();
-                            const showCooldownOption = isInCooldown;
-
-  
-                            const displayInfo = getRateDisplay(coinState, coin);
-
-                            return `
+                group.coins.forEach((coin, coinIndex) => {
+                    html += `
                             <div class="coin-item-simple">
                                 <span class="coin-text">
                                     <strong>${coin.exchange} - ${coin.symbol}</strong>
-                                    ${statusDisplay ? `<span style="color: #718096; font-size: 0.9em; margin-left: 8px;">${statusDisplay}</span>` : ''}
                                     <br>
                                     <span style="color: #718096; font-size: 0.9em;">
-                                        ${displayInfo.hasData ? `${displayInfo.showIcon}${displayInfo.timeText}: ${displayInfo.rateText} ${displayInfo.comparisonText} 阈值: ${coin.threshold}% | ` : `阈值: ${coin.threshold}% | `}颗粒度: ${coin.timeframe === '24h' ? '24小时' : '每小时'}
+                                        阈值: ${coin.threshold}% | 颗粒度: ${coin.timeframe === '24h' ? '24小时' : '每小时'}
                                     </span>
                                 </span>
                                 <div class="coin-actions">
                                     <div class="more-menu">
-                                        <button onclick="window.appMonitorUI.toggleMoreMenu('group_${group.id}_${actualIndex}')" class="more-btn-small">⋮</button>
-                                        <div id="moreMenu_group_${group.id}_${actualIndex}" class="more-dropdown more-dropdown-small">
-                                            ${showCooldownOption ?
-                                                `<button onclick="window.appMonitorUI.togglePause('${coin.symbol}', '${group.id}', '${coin.exchange}', '${coin.timeframe}')" class="more-dropdown-item">重置冷却期</button>` : ''
-                                            }
-                                            <button onclick="window.appConfig.editCoinInGroup('${group.id}', '${actualIndex}')" class="more-dropdown-item">编辑</button>
+                                        <button onclick="window.appConfig.editCoinInGroup('${group.id}', '${coinIndex}')" class="more-btn-small">⋮</button>
+                                        <div id="moreMenu_group_${group.id}_${coinIndex}" class="more-dropdown more-dropdown-small">
+                                            <button onclick="window.appConfig.editCoinInGroup('${group.id}', '${coinIndex}')" class="more-dropdown-item">编辑</button>
                                             <button onclick="window.appConfig.removeCoinFromGroup('${group.id}', '${coin.symbol}_${coin.exchange}_${coin.timeframe}')" class="more-dropdown-item danger">删除</button>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        `;}).join('')}
+                            </div>`;
+                });
+
+                html += `
+                        </div>`;
+            } else {
+                html += `
+                        <div style="text-align: center; color: #9ca3af; padding: 20px; border: 1px dashed #d1d5db; border-radius: 4px;">
+                            暂无监控币种
+                        </div>`;
+            }
+
+            html += `
                     </div>
                 </div>
-            </div>
-        `).join('');
-    }
+            </div>`;
+        });
 
+        container.innerHTML = html;
+
+        // 自动收起禁用的分组（仅在首次加载时）
+        this.autoCollapseDisabledGroups();
+    }
     // 添加新的邮件分组
     async addEmailGroup() {
         const groups = window.appState.currentConfig?.email_groups || [];

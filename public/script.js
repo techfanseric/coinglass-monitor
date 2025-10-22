@@ -181,3 +181,8 @@ function handleGroupToggleChange(groupId, isEnabled) {
     return window.appConfig.handleGroupToggleChange(groupId, isEnabled);
 }
 
+// 收起展开相关
+function toggleGroupCollapsed(groupId) {
+    return window.appConfig.toggleGroupCollapsed(groupId);
+}
+
